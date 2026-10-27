@@ -95,14 +95,26 @@ def _header(fig, rep):
     return top + 1.25
 
 
-def _kpis(fig, rep, y):
-    k = rep.kpis
-    tiles = [('Total horizontal', f"{k['total_hz_m']:,.0f}", 'm'),
-             ('Legs drilled', f"{k['legs_drilled']}", ''),
-             ('Avg daily progress', f"{k['avg_daily_m']:,.0f}", 'm/day'),
-             ('Operational days', f"{k['operational_days']}", 'days'),
-             ('Drilling days', f"{k['drilling_days']}", 'days'),
-             ('Non-drilling days', f"{k['non_drilling_days']}", 'days')]
+def multi_tiles(k):
+    return [('Total horizontal', f"{k['total_hz_m']:,.0f}", 'm'),
+            ('Legs drilled', f"{k['legs_drilled']}", ''),
+            ('Avg daily progress', f"{k['avg_daily_m']:,.0f}", 'm/day'),
+            ('Operational days', f"{k['operational_days']}", 'days'),
+            ('Drilling days', f"{k['drilling_days']}", 'days'),
+            ('Non-drilling days', f"{k['non_drilling_days']}", 'days')]
+
+
+def single_tiles(k):
+    return [('Total depth', f"{k['total_depth_m']:,.0f}", 'm'),
+            ('Avg daily progress', f"{k['avg_daily_m']:,.0f}", 'm/day'),
+            ('Operational hours', f"{k['operational_hours']:,.1f}", 'hrs'),
+            ('Operational days', f"{k['operational_days']}", 'days'),
+            ('Drilling days', f"{k['drilling_days']}", 'days'),
+            ('Non-drilling days', f"{k['non_drilling_days']}", 'days')]
+
+
+def _kpis(fig, rep, y, tiles=None):
+    tiles = tiles or multi_tiles(rep.kpis)
     gap, th = 0.09, 0.5
     tw = (CW - 2 * gap) / 3
     c = _canvas(fig, ML, y, CW, 2 * th + gap)
@@ -245,6 +257,148 @@ def build_pdf(rep) -> bytes:
     y = _combo_chart(fig, rep, y)
     y = _time_chart(fig, rep, y)
     _leg_table(fig, rep, y, PAGE_H - MB - 0.25)
+    _footer(fig)
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        d = pdf.infodict()
+        d['Title'] = f"Drilling Operations Report - {rep.well.get('Well Name', '')}"
+        d['Author'] = 'Belloy Petroleum Consulting LTD.'
+        pdf.savefig(fig)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+# ====================================================================== single leg
+SECTION_TONES = {'Surface': ('#9aa7b4', '#f1f3f5'), 'Int / Build': ('#c9a227', '#fbf6e6'),
+                 'Lateral': ('#255f93', '#eaf1f8')}
+
+
+def _single_chart(fig, rep, y):
+    df = rep.daily
+    _section_title(fig, y, 'Daily progress & measured depth',
+                   'Bars: metres drilled per report day (left axis)   \u00b7   Line: measured depth (right axis)'
+                   '   \u00b7   Shading: well section')
+    ax = _ax(fig, ML + 0.45, y + 0.68, CW - 0.95, 2.75)
+    xn = mdates.date2num(pd.to_datetime(df['Date']))
+    dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
+    to = pd.to_numeric(df['To (m)'], errors='coerce').to_numpy(float)
+    top = max(250, math.ceil(dr.max() / 250) * 250)
+    # section shading: consecutive report days that end in the same section
+    secs = list(df['Section'])
+    i = 0
+    while i < len(secs):
+        j = i
+        while j + 1 < len(secs) and secs[j + 1] == secs[i]:
+            j += 1
+        if secs[i]:
+            line, tint = SECTION_TONES[secs[i]]
+            ax.axvspan(xn[i] - 0.5, xn[j] + 0.5, color=tint, zorder=0, linewidth=0)
+            ax.text((xn[i] + xn[j]) / 2, top * 0.985, secs[i].upper(), ha='center', va='top', fontsize=5.6,
+                    color=line, fontweight='bold', zorder=1)
+        i = j + 1
+    bars = ax.bar(xn, dr, width=0.62, color=BAR, zorder=1, label='Metres drilled')
+    for xv, v in zip(xn, dr):
+        ax.text(xv, top * 0.012, f'{v:,.0f}', ha='center', va='bottom', fontsize=4.9,
+                color=BAR_TEXT if v > 0 else MUTED, fontweight='bold' if v > 0 else 'normal', zorder=2)
+    _style(ax)
+    ax.grid(False)
+    ax.set_ylim(0, top)
+    ax.yaxis.set_major_locator(MultipleLocator(top / 5))
+    ax.set_ylabel('Metres drilled per day', fontsize=6.3, color=INK2)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(df) // 12)))
+    ax.set_xlim(xn.min() - 0.5, xn.max() + 0.5)
+
+    ax2 = ax.twinx()
+    ytop = math.ceil(np.nanmax(to) * 1.15 / 500) * 500 if np.isfinite(to).any() else 500
+    for r in runs(to):
+        sx, sy = pchip(xn[r], to[r])
+        ax2.plot(sx, sy, color=NAVY, linewidth=1.8, solid_capstyle='round', zorder=4)
+    for xv, v, sec in zip(xn, to, secs):
+        if np.isfinite(v):
+            colr = SECTION_TONES.get(sec, (NAVY, None))[0]
+            ax2.plot([xv], [v], marker='o', markersize=4, color=colr, markeredgecolor='white',
+                     markeredgewidth=0.6, zorder=5)
+            ax2.annotate(f'{v:,.0f}', (xv, v), xytext=(0, 5), textcoords='offset points', ha='center',
+                         va='bottom', fontsize=5.2, color=NAVY, fontweight='bold', zorder=6)
+    ax2.set_ylim(0, ytop)
+    ax2.yaxis.set_major_locator(MultipleLocator(500 if ytop > 1500 else 250))
+    ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:,.0f}'))
+    ax2.set_ylabel('Measured depth (m)', fontsize=6.3, color=INK2)
+    ax2.tick_params(labelsize=6.3, pad=3)
+    for sp in ('top', 'left', 'right', 'bottom'):
+        ax2.spines[sp].set_visible(False)
+    handles = [bars, Line2D([], [], color=NAVY, linewidth=1.8, label='Measured depth')]
+    handles += [Rectangle((0, 0), 1, 1, color=SECTION_TONES[n][1], ec=SECTION_TONES[n][0], lw=0.6, label=n)
+                for n in ('Surface', 'Int / Build', 'Lateral') if n in secs]
+    ax.legend(handles, [h.get_label() for h in handles], loc='lower center', bbox_to_anchor=(0.5, 1.0),
+              ncol=len(handles), fontsize=5.8, frameon=False, handlelength=1.3, columnspacing=1.0)
+    return y + 0.68 + 2.75 + 0.3
+
+
+def _single_time(fig, rep, y):
+    sec = rep.sections.dropna(subset=['Hours'])
+    _section_title(fig, y, 'Time by section', f"{rep.kpis['operational_hours']:,.1f} hrs spud to TD")
+    h = 0.2 * max(1, len(sec)) + 0.08
+    ax = _ax(fig, ML + 0.8, y + 0.42, CW - 1.55, h)
+    names, hrs = list(sec['Section']), list(sec['Hours'])
+    yy = range(len(names))
+    ax.barh(list(yy), hrs, height=0.6, color=[SECTION_TONES[n][0] for n in names], zorder=2)
+    total = sum(hrs) or 1
+    for yi, hv in zip(yy, hrs):
+        ax.text(hv + max(hrs) * 0.015, yi, f'{hv:,.1f} h  \u00b7  {hv / total:.0%}', va='center',
+                fontsize=5.8, color=INK2)
+    ax.set_yticks(list(yy)); ax.set_yticklabels(names, fontsize=6.3, color=INK)
+    ax.invert_yaxis()
+    ax.set_xlim(0, max(hrs) * 1.22 if hrs else 1)
+    for sp in ('top', 'right', 'bottom', 'left'):
+        ax.spines[sp].set_visible(False)
+    ax.set_xticks([])
+    return y + 0.42 + h + 0.15
+
+
+def _single_table(fig, rep, y):
+    _section_title(fig, y, 'Section summary')
+    rows = rep.sections.to_dict('records')
+    rh = 0.22
+    cols = [('Section', 0.0, 'left'), ('From (m)', 1.55, 'right'), ('To (m)', 2.3, 'right'),
+            ('Length (m)', 3.15, 'right'), ('Days', 3.7, 'right'), ('Start', 4.95, 'right'),
+            ('End', 6.0, 'right'), ('Hours', CW - 0.08, 'right')]
+    c = _canvas(fig, ML, y + 0.4, CW, 0.24 + rh * len(rows) + 0.3)
+    c.add_patch(Rectangle((0, 0), CW, 0.22, color=BRAND_TINT))
+    for name, x, ha in cols:
+        c.text(x + (0.08 if ha == 'left' else 0), 0.11, name.upper(), fontsize=5.6, color=BRAND,
+               fontweight='bold', ha=ha, va='center')
+    fmt = lambda v, f: '\u2014' if v is None or (isinstance(v, float) and np.isnan(v)) else f.format(v)  # noqa: E731
+    for i, r in enumerate(rows):
+        yy = 0.22 + rh * (i + 0.5)
+        c.plot([0, CW], [0.22 + rh * (i + 1)] * 2, color=GRID, linewidth=0.5)
+        c.add_patch(Rectangle((0.08, yy - 0.035), 0.07, 0.07, color=SECTION_TONES[r['Section']][0]))
+        vals = [r['Section'], fmt(r['From (m)'], '{:,.0f}'), fmt(r['To (m)'], '{:,.0f}'),
+                fmt(r['Length (m)'], '{:,.0f}'), fmt(r['Days'], '{:.0f}'),
+                _dt(r['Start'], '%d %b, %H:%M'), _dt(r['End'], '%d %b, %H:%M'), fmt(r['Hours'], '{:,.2f}')]
+        for (name, x, ha), v in zip(cols, vals):
+            c.text(x + (0.22 if name == 'Section' else 0), yy, v, fontsize=6.6, color=INK, ha=ha, va='center',
+                   fontweight='bold' if name in ('Section', 'Length (m)') else 'normal')
+    yt = 0.22 + rh * len(rows)
+    c.plot([0, CW], [yt, yt], color=BRAND_LINE, linewidth=0.9)
+    k = rep.kpis
+    c.text(0.22, yt + 0.13, 'Total', fontsize=6.6, fontweight='bold', color=NAVY, va='center')
+    c.text(3.15, yt + 0.13, f"{k['total_depth_m']:,.0f}", fontsize=6.6, fontweight='bold', color=NAVY,
+           ha='right', va='center')
+    c.text(CW - 0.08, yt + 0.13, f"{k['operational_hours']:,.2f}", fontsize=6.6, fontweight='bold',
+           color=NAVY, ha='right', va='center')
+
+
+def build_single_pdf(rep) -> bytes:
+    fig = plt.figure(figsize=(PAGE_W, PAGE_H))
+    fig.patch.set_facecolor('white')
+    fig.canvas.draw()
+    y = _header(fig, rep) + 0.12
+    y = _kpis(fig, rep, y, single_tiles(rep.kpis)) + 0.22
+    y = _single_chart(fig, rep, y)
+    y = _single_time(fig, rep, y)
+    _single_table(fig, rep, y)
     _footer(fig)
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
