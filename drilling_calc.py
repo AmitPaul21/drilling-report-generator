@@ -100,6 +100,8 @@ def build_report(inp: WellInputs) -> DrillingReport:
         if to is not None and frm is not None and (inp.heel_reached is None or lo is None or lo < inp.heel_reached):
             cap = heel_md if heel_md is not None and inp.legs else to
             tot += max(0.0, min(to, cap) - min(frm, cap))
+        elif to is not None and frm is not None and heel_md is not None and frm < heel_md < to:
+            tot += heel_md - frm                                  # last metres to the heel logged a day late
         finished_td = {lg.td for lg, e in zip(inp.legs, ends) if e is not None and (lo is None or e > lo) and e <= T[i]}
         for lg, a, e in zip(inp.legs, starts, ends):
             if a is None or not lg.kop or a > T[i] or (e is not None and lo is not None and e <= lo):
