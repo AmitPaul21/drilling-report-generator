@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from drilling_parser import WellInputs
+from drilling_parser import WellInputs, active_hours, idle_days
 
 END_OF_DAY = dt.time(23, 59)
 
@@ -150,10 +150,10 @@ def build_report(inp: WellInputs) -> DrillingReport:
     for lg in legs:
         marks.append((f'Leg {lg.number}', t_prev, lg.reached))
         t_prev = lg.reached
+    idle = idle_days(df['Date'])
     sec = []
     for name, a, b in marks:
-        hrs = (b - a).total_seconds() / 3600 if a and b else None
-        sec.append({'Section': name, 'Start': a, 'End': b, 'Hours': hrs})
+        sec.append({'Section': name, 'Start': a, 'End': b, 'Hours': active_hours(a, b, idle)})
     sections = pd.DataFrame(sec)
     for lg, h in zip(legs, sections['Hours'].iloc[2:]):
         lg.hours = None if pd.isna(h) else h
@@ -164,7 +164,7 @@ def build_report(inp: WellInputs) -> DrillingReport:
     dates = pd.to_datetime(df['Date'])
     kpis = {
         'total_hz_m': sum(lg.length for lg in legs),
-        'operational_days': int((dates.max() - dates.min()).days + 1) if len(dates) else 0,
+        'operational_days': int(dates.dt.normalize().nunique()),
         'drilling_days': drilling_days,
         'non_drilling_days': int((dr == 0).sum()),
         'avg_daily_m': float(dr[dr > 0].sum() / drilling_days) if drilling_days else 0.0,
