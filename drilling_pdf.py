@@ -1,5 +1,7 @@
-"""One-page (US Letter) Drilling Operations Report PDF, laid out like the Excel print of the
-'Drilling Report - Multi Leg' tab: header, KPI tiles, timing doughnut, leg banner, combo chart."""
+"""One-page (US Letter) Drilling Operations Report PDF - modern layout.
+
+Header with the well as the headline, a KPI strip, measured depth by leg, daily metres and
+time by section side by side, and a leg summary table. Each chart has a single y-scale."""
 from __future__ import annotations
 
 import io
@@ -7,27 +9,33 @@ import io
 import matplotlib
 
 matplotlib.use('Agg')
-import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from matplotlib.patches import FancyBboxPatch, Rectangle  # noqa: E402
+from matplotlib.ticker import FuncFormatter, MaxNLocator  # noqa: E402
 
-NAVY = '#14365c'
-BAND = '#dceaf8'
-TILE = '#21678a'
-TILE_EDGE = '#164a63'
-TILE_LABEL = '#ffe36e'
-INK = '#1b1b1b'
-GRID = '#d9d9d9'
-BAR = '#83cbeb'
-BAR_EDGE = '#1f4e79'
-MARKER = '#e03c31'
-SECTION_COLORS = {'Surface': '#156082', 'Int / Build': '#e97132'}
-LEG_COLORS = ['#2b7635', '#0f9ed5', '#a02b93', '#4ea72e', '#0d3a4e', '#994010',
-              '#5b9bd5', '#c00000', '#7f6000', '#3a3a3a']
+plt.rcParams.update({
+    'font.family': 'DejaVu Sans', 'font.size': 7.5, 'axes.titlesize': 9,
+    'axes.edgecolor': '#c9c8c2', 'axes.linewidth': 0.6, 'xtick.color': '#6b6a65',
+    'ytick.color': '#6b6a65', 'xtick.major.size': 0, 'ytick.major.size': 0,
+    'pdf.fonttype': 42,
+})
+
+INK = '#0b0b0b'
+INK2 = '#52514e'
+MUTED = '#8a8984'
+GRID = '#ebeae6'
+CARD = '#f5f4f1'
+ACCENT = '#2a78d6'
+BAR = '#6da7ec'
+NEUTRAL = '#a3a29c'
+# validated categorical order - colour follows the leg number
+LEG_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
 
 PAGE_W, PAGE_H = 8.5, 11.0
+M = 0.55                                   # page margin (in)
+CW = PAGE_W - 2 * M                        # content width
 
 
 def leg_color(n: int) -> str:
@@ -39,188 +47,197 @@ def _ax(fig, x, y, w, h, **kw):
     return fig.add_axes([x / PAGE_W, 1 - (y + h) / PAGE_H, w / PAGE_W, h / PAGE_H], **kw)
 
 
-def _fmt_dt(v):
-    return '' if v is None or pd.isna(v) else pd.Timestamp(v).strftime('%-d-%b-%Y @ %H:%M')
+def _canvas(fig, x, y, w, h):
+    ax = _ax(fig, x, y, w, h)
+    ax.set_xlim(0, w); ax.set_ylim(h, 0); ax.axis('off')   # inch units, y downwards
+    return ax
 
 
+def _dt(v, fmt='%d %b %Y, %H:%M'):
+    return '—' if v is None or pd.isna(v) else pd.Timestamp(v).strftime(fmt)
+
+
+def _style(ax, ygrid=True):
+    for s in ('top', 'right', 'left'):
+        ax.spines[s].set_visible(False)
+    ax.spines['bottom'].set_color('#c9c8c2')
+    if ygrid:
+        ax.grid(axis='y', color=GRID, linewidth=0.6)
+    ax.set_axisbelow(True)
+    ax.tick_params(labelsize=6.5, pad=3)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:,.0f}'))
+
+
+def _section_title(fig, x, y, title, sub=None):
+    c = _canvas(fig, x, y, 4, 0.34)
+    c.text(0, 0.12, title, fontsize=9.5, fontweight='bold', color=INK, va='center')
+    if sub:
+        c.text(0, 0.29, sub, fontsize=6.5, color=MUTED, va='center')
+
+
+# ---------------------------------------------------------------- blocks
 def _header(fig, rep):
-    ax = _ax(fig, 0.5, 0.5, 7.5, 0.95)
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis('off')
-    ax.add_patch(Rectangle((0, 0.66), 1, 0.34, color=NAVY))
-    ax.text(0.5, 0.83, 'Drilling Operations Report', ha='center', va='center', color='white',
-            fontsize=13, fontweight='bold')
-    ax.add_patch(Rectangle((0, 0), 1, 0.66, color=BAND))
     w = rep.well
-    rows = [('Operator:', w.get('Licensee', ''), 'UWI:', w.get('UWI', '')),
-            ('Well Name:', w.get('Well Name', ''), 'Spud Date:', _fmt_dt(rep.milestones.get('Spud'))),
-            ('Location:', w.get('Surface Location', ''), 'TD Date:', _fmt_dt(rep.milestones.get('Total Depth')))]
-    for i, (l1, v1, l2, v2) in enumerate(rows):
-        y = 0.55 - i * 0.2
-        ax.text(0.155, y, l1, ha='right', va='center', fontsize=8, fontweight='bold', color=INK)
-        ax.text(0.165, y, v1, ha='left', va='center', fontsize=8, color=INK)
-        ax.text(0.655, y, l2, ha='right', va='center', fontsize=8, fontweight='bold', color=INK)
-        ax.text(0.665, y, v2, ha='left', va='center', fontsize=8, color=INK)
+    c = _canvas(fig, M, 0.45, CW, 1.05)
+    c.add_patch(Rectangle((0, 0), 0.5, 0.05, color=ACCENT))
+    c.text(0, 0.22, 'DRILLING OPERATIONS REPORT', fontsize=7, color=ACCENT, fontweight='bold',
+           va='center')
+    c.text(0, 0.47, w.get('Well Name') or 'Unnamed well', fontsize=17, fontweight='bold', color=INK,
+           va='center')
+    sub = '   ·   '.join(v for v in (w.get('Licensee'), w.get('UWI'), w.get('Surface Location')) if v)
+    c.text(0, 0.72, sub, fontsize=7.5, color=INK2, va='center')
+    # spud / TD on the right
+    for i, (lab, val) in enumerate((('SPUD', rep.milestones.get('Spud')),
+                                    ('TOTAL DEPTH', rep.milestones.get('Total Depth')))):
+        x = CW - 1.55 * (1 - i) - 0.05
+        c.text(x - 1.4, 0.22, lab, fontsize=6, color=MUTED, fontweight='bold', va='center')
+        c.text(x - 1.4, 0.42, _dt(val), fontsize=7.5, color=INK, va='center')
+    c.plot([0, CW], [0.95, 0.95], color='#e2e1dc', linewidth=0.8)
 
 
 def _kpis(fig, rep):
     k = rep.kpis
-    ax = _ax(fig, 0.5, 1.5, 3.6, 2.85)
-    ax.set_xlim(0, 3.6); ax.set_ylim(0, 2.85); ax.axis('off')
-    ax.text(1.8, 2.62, 'Key Performance Indicators', ha='center', va='center', fontsize=11,
-            fontweight='bold', color=INK)
-    tiles = [('TOTAL HZ', f"{k['total_hz_m']:,.0f} m"),
-             ('OPERATIONAL DAYS', f"{k['operational_days']} Days"),
-             ('DRILLING DAYS', f"{k['drilling_days']} Days"),
-             ('AVG DAILY PROGRESS', f"{k['avg_daily_m']:,.2f} m/day"),
-             ('NUMBER OF LEGS', f"{k['legs_drilled']}"),
-             ('NON DRILLING', f"{k['non_drilling_days']} Days")]
-    tw, th = 1.55, 0.58
-    for i, (label, val) in enumerate(tiles):
-        col, row = i % 2, i // 2
-        x = 0.2 + col * (tw + 0.25)
-        y = 1.72 - row * (th + 0.2)
-        ax.add_patch(FancyBboxPatch((x + 0.03, y - 0.03), tw, th, boxstyle='round,pad=0,rounding_size=0.08',
-                                    color='#9aa9b5', zorder=1))
-        ax.add_patch(FancyBboxPatch((x, y), tw, th, boxstyle='round,pad=0,rounding_size=0.08',
-                                    facecolor=TILE, edgecolor=TILE_EDGE, linewidth=0.8, zorder=2))
-        ax.text(x + tw / 2, y + th * 0.7, label, ha='center', va='center', fontsize=7.5,
-                color=TILE_LABEL, zorder=3)
-        ax.text(x + tw / 2, y + th * 0.32, val, ha='center', va='center', fontsize=9.5,
-                color='white', fontweight='bold', zorder=3)
+    tiles = [('Total horizontal', f"{k['total_hz_m']:,.0f}", 'm'),
+             ('Legs drilled', f"{k['legs_drilled']}", ''),
+             ('Operational days', f"{k['operational_days']}", 'days'),
+             ('Drilling days', f"{k['drilling_days']}", 'days'),
+             ('Non-drilling days', f"{k['non_drilling_days']}", 'days'),
+             ('Avg daily progress', f"{k['avg_daily_m']:,.0f}", 'm/day')]
+    gap = 0.1
+    tw = (CW - gap * (len(tiles) - 1)) / len(tiles)
+    c = _canvas(fig, M, 1.6, CW, 0.82)
+    for i, (lab, val, unit) in enumerate(tiles):
+        x = i * (tw + gap)
+        c.add_patch(FancyBboxPatch((x, 0), tw, 0.8, boxstyle='round,pad=0,rounding_size=0.06',
+                                   facecolor=CARD, edgecolor='none'))
+        c.text(x + 0.12, 0.2, lab.upper(), fontsize=5.2, color=MUTED, fontweight='bold', va='center')
+        t = c.text(x + 0.12, 0.52, val, fontsize=15, color=INK, fontweight='bold', va='center')
+        if unit:
+            fig.canvas.draw() if not hasattr(fig, '_drawn') else None
+            fig._drawn = True
+            bb = t.get_window_extent(renderer=fig.canvas.get_renderer())
+            wid = bb.width / fig.dpi
+            c.text(x + 0.12 + wid + 0.05, 0.56, unit, fontsize=6.5, color=INK2, va='center')
 
 
-def _donut(fig, rep):
-    sec = rep.sections.dropna(subset=['Hours'])
-    sec = sec[sec['Hours'] > 0]
-    ax = _ax(fig, 4.3, 1.62, 3.6, 2.5)
-    if sec.empty:
-        ax.axis('off'); ax.text(0.5, 0.5, 'No milestone times entered', ha='center', va='center'); return
-    names = list(sec['Section'])
-    colors = [SECTION_COLORS.get(n) or leg_color(int(n.split()[1])) for n in names]
-    hours = list(sec['Hours'])
-    total = sum(hours)
-    wedges, _ = ax.pie(hours, colors=colors, startangle=90, counterclock=False, radius=0.95,
-                       wedgeprops=dict(width=0.42, edgecolor='white', linewidth=1.2))
-    import math
-    for wdg, n, h in zip(wedges, names, hours):
-        pct = h / total
-        ang = math.radians((wdg.theta1 + wdg.theta2) / 2)
-        label = f"Hours\n{n.upper() if not n.startswith('Leg') else n}\n{h:,.2f}\n{pct:.0%}"
-        if pct >= 0.06:
-            r = 0.74
-            ax.text(r * math.cos(ang), r * math.sin(ang), label, ha='center', va='center',
-                    fontsize=5.2, color='white', fontweight='bold', linespacing=1.1)
-        else:
-            r = 1.13
-            ax.text(r * math.cos(ang), r * math.sin(ang), label, ha='center', va='center',
-                    fontsize=5.0, color=INK, linespacing=1.1)
-    ax.text(0, 0, 'Drilling Timing\nSummary', ha='center', va='center', fontsize=8.5,
-            fontweight='bold', color=INK)
-    ax.set_aspect('equal')
-    lg = _ax(fig, 4.2, 4.15, 3.8, 0.22)
-    lg.axis('off')
-    handles = [Rectangle((0, 0), 1, 1, color=c) for c in colors]
-    lg.legend(handles, [n.upper() if not n.startswith('Leg') else n for n in names], loc='center',
-              ncol=len(names), fontsize=5.5, frameon=False, handlelength=0.8, handletextpad=0.3,
-              columnspacing=0.8)
-
-
-def _leg_banner(fig, rep):
-    ax = _ax(fig, 0.5, 4.55, 7.5, 0.92)
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis('off')
-    ax.text(0.5, 0.86, 'Daily Drilling Process & Measured Depth', ha='center', va='center',
-            fontsize=11, fontweight='bold', color=INK)
-    ax.add_patch(FancyBboxPatch((0.02, 0.04), 0.96, 0.58, boxstyle='round,pad=0,rounding_size=0.06',
-                                facecolor='white', edgecolor='#5d91a8', linewidth=1.0,
-                                mutation_aspect=0.5))
-    ax.text(0.5, 0.44, 'LEG SECTIONS (Meters Drilled Per LEG)', ha='center', va='center',
-            fontsize=7.5, fontweight='bold', color='#1f6f9a')
-    txt = '  |  '.join(f'Leg {lg.number}: {lg.length:,.0f} m' for lg in rep.legs if lg.length > 0)
-    ax.text(0.5, 0.2, txt or '—', ha='center', va='center', fontsize=7.5, fontweight='bold', color=INK)
-
-
-def _place_labels(points, min_gap):
-    """points: list of (x_index, y, text). Returns list with vertical offsets (points) avoiding overlaps
-    between labels on the same x position."""
-    out = []
-    by_x = {}
-    for p in points:
-        by_x.setdefault(p[0], []).append(p)
-    for x, pts in by_x.items():
-        pts = sorted(pts, key=lambda p: p[1])
-        last_y = None
-        for i, (xi, y, t) in enumerate(pts):
-            off = 6
-            if last_y is not None and abs(y - last_y) < min_gap:
-                out[-1] = (*out[-1][:3], -12)   # lower of two close labels goes under its marker
-            out.append((xi, y, t, off))
-            last_y = y
-    return out
-
-
-def _combo(fig, rep):
+def _depth_chart(fig, rep):
     df = rep.daily
-    ax = _ax(fig, 1.05, 5.75, 6.35, 3.85)
-    x = list(range(len(df)))
-    dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
-    bars = ax.bar(x, dr, width=0.92, color=BAR, edgecolor=BAR_EDGE, linewidth=0.6, label='DRILLED', zorder=2)
-    for b, v in zip(bars, dr):
-        ax.text(b.get_x() + b.get_width() / 2, 12 if v > 60 else v + 12, f'{v:,.0f}', ha='center',
-                va='bottom', fontsize=5.5, color=INK, zorder=4)
-    ymax_bar = max(100, (int(dr.max() / 100) + 1) * 100)
-    ax.set_ylim(0, ymax_bar)
-    ax.set_ylabel('Daily Drilling Progress (m)', fontsize=8)
-    ax.set_xlabel('Date', fontsize=8)
-    ax.grid(axis='y', color=GRID, linewidth=0.6, zorder=0)
-    ax.set_axisbelow(True)
-    ax.tick_params(labelsize=6.5)
-    ax.set_xticks(x)
-    ax.set_xticklabels([pd.Timestamp(d).strftime('%d-%b-%y') for d in df['Date']], rotation=45,
-                       ha='right', fontsize=6, fontweight='bold')
-    ax.set_xlim(-0.6, len(df) - 0.4)
-    for s in ('top',):
-        ax.spines[s].set_visible(False)
+    _section_title(fig, M, 2.6, 'Measured depth by leg', 'Kick-off depth to end depth for each leg, by report day')
+    ax = _ax(fig, M + 0.45, 3.05, CW - 0.55, 2.55)
+    x = pd.to_datetime(df['Date'])
+    legs = [lg for lg in rep.legs if lg.start_idx is not None]
+    first = legs[0].start_idx if legs else len(df) - 1
+    ax.plot(x[:first + 1], df['To (m)'][:first + 1], color=NEUTRAL, linewidth=1.8, marker='o',
+            markersize=3.5, markeredgecolor='white', markeredgewidth=0.6, label='Surface / build', zorder=3)
+    for lg in legs:
+        s = pd.to_numeric(df[f'Leg {lg.number}'], errors='coerce')
+        ax.plot(x, s, color=leg_color(lg.number), linewidth=1.8, marker='o', markersize=3.8,
+                markeredgecolor='white', markeredgewidth=0.6, label=f'Leg {lg.number}', zorder=4)
+        last = s.last_valid_index()
+        if last is not None:
+            ax.annotate(f'{s[last]:,.0f}', (x[last], s[last]), xytext=(0, 5), textcoords='offset points',
+                        ha='center', fontsize=5.8, color=INK2, fontweight='bold')
+    _style(ax)
+    ax.set_ylabel('MD (m)', fontsize=6.5, color=INK2)
+    ax.set_ylim(0, None)
+    ax.yaxis.set_major_locator(MaxNLocator(5))
+    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter('%d %b'))
+    ax.xaxis.set_major_locator(matplotlib.dates.DayLocator(interval=max(1, len(df) // 10)))
+    ax.set_xlim(x.min() - pd.Timedelta(hours=12), x.max() + pd.Timedelta(hours=12))
+    ax.legend(loc='lower right', ncol=min(4, len(legs) + 1), fontsize=6, frameon=False,
+              handlelength=1.4, columnspacing=1.0, borderaxespad=0.2)
 
-    ax2 = ax.twinx()
-    leg_cols = [c for c in df.columns if c.startswith('Leg ')]
-    md_max = 0
-    labels = []
-    handles = [bars]
-    for col in leg_cols:
-        n = int(col.split()[1])
-        s = pd.to_numeric(df[col], errors='coerce')
-        if s.notna().sum() == 0:
-            continue
-        md_max = max(md_max, s.max())
-        h, = ax2.plot(x, s, color=leg_color(n), linewidth=1.6, marker='o', markersize=3.2,
-                      markerfacecolor=MARKER, markeredgecolor=MARKER, label=col, zorder=5)
-        handles.append(h)
-        labels += [(i, v, f'{v:,.0f}') for i, v in zip(x, s) if pd.notna(v)]
-    top = max(500, (int(md_max / 500) + 1) * 500)
-    ax2.set_ylim(0, top)
-    ax2.set_ylabel('Measured Depth (m)', fontsize=8)
-    ax2.tick_params(labelsize=6.5)
-    ax2.spines['top'].set_visible(False)
-    gap = top * 0.035
-    for i, v, t, off in _place_labels(labels, gap):
-        ax2.annotate(t, (i, v), xytext=(0, off), textcoords='offset points', ha='center', fontsize=5.8,
-                     fontweight='bold', color=INK, zorder=6,
-                     bbox=dict(boxstyle='round,pad=0.1', facecolor='white', edgecolor='none', alpha=0.7))
-    ax.legend(handles, [h.get_label() for h in handles], loc='lower center', bbox_to_anchor=(0.5, 1.0),
-              ncol=len(handles), fontsize=6.5, frameon=False, handlelength=1.6, columnspacing=1.2)
+
+def _daily_chart(fig, rep):
+    df = rep.daily
+    w = CW * 0.56
+    _section_title(fig, M, 5.85, 'Daily metres drilled', 'All legs combined, per report day')
+    ax = _ax(fig, M + 0.45, 6.3, w - 0.5, 1.95)
+    x = pd.to_datetime(df['Date'])
+    dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
+    bars = ax.bar(x, dr, width=0.72, color=BAR, zorder=2)
+    for b, v in zip(bars, dr):
+        if v > 0:
+            ax.text(b.get_x() + b.get_width() / 2, v + dr.max() * 0.02, f'{v:,.0f}', ha='center',
+                    va='bottom', fontsize=5, color=INK2)
+    _style(ax)
+    ax.set_ylim(0, dr.max() * 1.15 if dr.max() else 1)
+    ax.yaxis.set_major_locator(MaxNLocator(4))
+    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter('%d %b'))
+    ax.xaxis.set_major_locator(matplotlib.dates.DayLocator(interval=max(2, len(df) // 6)))
+    ax.set_xlim(x.min() - pd.Timedelta(hours=14), x.max() + pd.Timedelta(hours=14))
+
+
+def _time_chart(fig, rep):
+    sec = rep.sections.dropna(subset=['Hours'])
+    x0 = M + CW * 0.6
+    w = CW * 0.4
+    _section_title(fig, x0, 5.85, 'Time by section', f"{rep.kpis['total_hours']:,.1f} hrs spud to TD")
+    ax = _ax(fig, x0 + 0.62, 6.3, w - 0.95, 1.95)
+    names = list(sec['Section'])
+    hrs = list(sec['Hours'])
+    colors = [leg_color(int(n.split()[1])) if n.startswith('Leg') else NEUTRAL for n in names]
+    y = range(len(names))
+    ax.barh(list(y), hrs, height=0.62, color=colors, zorder=2)
+    total = sum(hrs) or 1
+    for yi, h in zip(y, hrs):
+        ax.text(h + max(hrs) * 0.03, yi, f'{h:,.1f} h  ·  {h / total:.0%}', va='center', fontsize=5.6,
+                color=INK2)
+    ax.set_yticks(list(y)); ax.set_yticklabels(names, fontsize=6.5, color=INK)
+    ax.invert_yaxis()
+    ax.set_xlim(0, max(hrs) * 1.45 if hrs else 1)
+    for s in ('top', 'right', 'bottom', 'left'):
+        ax.spines[s].set_visible(False)
+    ax.set_xticks([])
+    ax.tick_params(axis='y', pad=4)
+
+
+def _leg_table(fig, rep):
+    _section_title(fig, M, 8.45, 'Leg summary')
+    cols = [('Leg', 0.0, 'left'), ('Kick-off (m)', 1.35, 'right'), ('End MD (m)', 2.45, 'right'),
+            ('Length (m)', 3.5, 'right'), ('Reached', 5.15, 'right'), ('Leg time (hrs)', CW - 0.05, 'right')]
+    rows = [lg for lg in rep.legs]
+    rh = 0.18
+    c = _canvas(fig, M, 8.78, CW, rh * (len(rows) + 2) + 0.1)
+    for name, x, ha in cols:
+        c.text(x, 0.1, name.upper(), fontsize=5.6, color=MUTED, fontweight='bold', ha=ha, va='center')
+    c.plot([0, CW], [0.2, 0.2], color='#d6d5d0', linewidth=0.7)
+    for i, lg in enumerate(rows):
+        yy = 0.2 + rh * (i + 0.5)
+        if i % 2 == 1:
+            c.add_patch(Rectangle((0, 0.2 + rh * i), CW, rh, color='#faf9f7', zorder=0))
+        c.add_patch(Rectangle((0, yy - 0.035), 0.07, 0.07, color=leg_color(lg.number)))
+        vals = [f'Leg {lg.number}', f'{lg.kop:,.0f}' if lg.kop else '—', f'{lg.td:,.0f}' if lg.td else '—',
+                f'{lg.length:,.0f}', _dt(lg.reached), '—' if lg.hours is None else f'{lg.hours:,.2f}']
+        for (name, x, ha), v in zip(cols, vals):
+            c.text(x + (0.14 if name == 'Leg' else 0), yy, v, fontsize=7, color=INK, ha=ha, va='center',
+                   fontweight='bold' if name in ('Leg', 'Length (m)') else 'normal')
+    yt = 0.2 + rh * len(rows)
+    c.plot([0, CW], [yt, yt], color='#d6d5d0', linewidth=0.7)
+    c.text(0.14, yt + 0.11, 'Total', fontsize=7, fontweight='bold', color=INK, va='center')
+    c.text(3.5, yt + 0.11, f"{rep.kpis['total_hz_m']:,.0f}", fontsize=7, fontweight='bold', color=INK,
+           ha='right', va='center')
+
+
+def _footer(fig, rep):
+    c = _canvas(fig, M, PAGE_H - 0.5, CW, 0.2)
+    c.plot([0, CW], [0, 0], color='#e2e1dc', linewidth=0.6)
+    c.text(0, 0.12, 'Belloy Petroleum Consulting Ltd.  ·  Drilling Report Generator', fontsize=5.8,
+           color=MUTED, va='center')
+    c.text(CW, 0.12, f"Generated {pd.Timestamp.now().strftime('%d %b %Y')}", fontsize=5.8, color=MUTED,
+           ha='right', va='center')
 
 
 def build_pdf(rep) -> bytes:
     fig = plt.figure(figsize=(PAGE_W, PAGE_H))
-    # page frame like the Excel print area
-    frame = fig.add_axes([0, 0, 1, 1]); frame.axis('off'); frame.set_xlim(0, PAGE_W); frame.set_ylim(0, PAGE_H)
-    frame.add_patch(Rectangle((0.5, PAGE_H - 10.4), 7.5, 9.9, fill=False, edgecolor=NAVY, linewidth=1.2))
-    frame.plot([0.5, 8.0], [PAGE_H - 4.45, PAGE_H - 4.45], color=NAVY, linewidth=1.0)
+    fig.patch.set_facecolor('white')
     _header(fig, rep)
     _kpis(fig, rep)
-    _donut(fig, rep)
-    _leg_banner(fig, rep)
-    _combo(fig, rep)
+    _depth_chart(fig, rep)
+    _daily_chart(fig, rep)
+    _time_chart(fig, rep)
+    _leg_table(fig, rep)
+    _footer(fig, rep)
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
         d = pdf.infodict()
