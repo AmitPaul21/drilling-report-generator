@@ -46,17 +46,19 @@ CW = PAGE_W - 2 * M                        # content width
 
 @functools.lru_cache(maxsize=1)
 def load_logo():
-    """Belloy logo as an RGBA array, or None. Uses belloy_logo.png if present, otherwise the
-    website logo (white on transparent), recoloured navy for a white page."""
+    """Belloy logo as an RGBA array, or None. Uses belloy_logo.png from the repo if present,
+    otherwise tries the website. A white logo (as on the website) is recoloured navy."""
     try:
         import numpy as np
         from PIL import Image
         if LOGO_FILE.exists():
             img = Image.open(LOGO_FILE).convert('RGBA')
-            return np.asarray(img)
-        req = urllib.request.Request(LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=6) as r:
-            img = Image.open(io.BytesIO(r.read())).convert('RGBA')
+        else:
+            req = urllib.request.Request(LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=6) as r:
+                img = Image.open(io.BytesIO(r.read())).convert('RGBA')
+        if img.width > 900:
+            img = img.resize((900, round(img.height * 900 / img.width)), Image.LANCZOS)
         arr = np.array(img)
         if arr[..., :3][arr[..., 3] > 128].mean() > 200:        # white logo -> recolour
             arr[..., 0], arr[..., 1], arr[..., 2] = LOGO_COLOR
