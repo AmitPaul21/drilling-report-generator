@@ -152,25 +152,77 @@ def read_well_report(file_bytes: bytes) -> WellInputs:
     try:
         if 'Data' not in wb.sheetnames or 'DSum1' not in wb.sheetnames:
             raise WellReportError('This workbook has no "Data" and "DSum1" sheets, so it is not a Well Report.')
-        D = _grid(wb['Data'], 60, 22)
-        g = lambda ref: D.get(_rc(ref))  # noqa: E731
-        if not str(g('B40') or '').startswith('Hz Leg 1') or 'Total Depth' not in str(g('B50') or ''):
-            raise WellReportError('The "Data" sheet layout does not match the Well Report template '
-                                  '(expected "Hz Leg 1 Interval" in B40 and "Total Depth" in B50).')
-
+        D = _grid(wb['Data'], 80, 22)
         warnings: list[str] = []
+
+        # find cells by their labels, so older / newer Well Report layouts (rows shifted) still read
+        def label_rows(col, prefix):
+            p = prefix.lower()
+            return [r for (r, c), v in sorted(D.items()) if c == col and isinstance(v, str)
+                    and v.strip().lower().startswith(p)]
+
+        def row_of(col, *prefixes):
+            for pr in prefixes:
+                rows = label_rows(col, pr)
+                if rows:
+                    return rows[0]
+            return None
+
+        def val(row, col):
+            return None if row is None else D.get((row, col))
+
+        B, C, Dc, E, G, I, K = 2, 3, 4, 5, 7, 9, 11
+        r_name = row_of(B, 'Well Name')
+        leg_rows = label_rows(B, 'Hz Leg')
+        if r_name is None or not leg_rows:
+            raise WellReportError('The "Data" sheet does not look like a Well Report: no "Well Name:" label or '
+                                  '"Hz Leg ... Interval" rows were found in column B.')
+        r_elev = [r for (r, c), v in D.items() if c == I and isinstance(v, str) and v.strip().lower().startswith('ground')]
+        r_kb = [r for (r, c), v in D.items() if c == I and isinstance(v, str) and v.strip().lower().startswith('kelly')]
         well = {
-            'Licensee': _text(g('C5')), 'Well Name': _text(g('C6')), 'UWI': _text(g('C7')),
-            'Licence #': _text(g('C8')), 'AFE #': _text(g('C9')), 'Province': _text(g('I7')),
-            'Field': _text(g('I10')), 'Target Zone': _text(g('I9')), 'Drilling Contractor': _text(g('C12')),
-            'Surface Location': _text(g('I14')), 'Bottom Hole Location': _text(g('I15')),
-            'Ground Elevation (m)': _num(g('K5')), 'KB Elevation (m)': _num(g('K6')),
+            'Licensee': _text(val(row_of(B, 'Licensee'), C)), 'Well Name': _text(val(r_name, C)),
+            'UWI': _text(val(row_of(B, 'U.W.I', 'UWI'), C)),
+            'Licence #': _text(val(row_of(B, 'Licence #', 'License #', 'Licence No', 'License No'), C)),
+            'AFE #': _text(val(row_of(B, 'A.F.E', 'AFE'), C)),
+            'Province': _text(val(row_of(G, 'Province'), I)), 'Field': _text(val(row_of(G, 'Field'), I)),
+            'Target Zone': _text(val(row_of(G, 'Target Zone'), I)),
+            'Drilling Contractor': _text(val(row_of(B, 'Drilling Contractor'), C)),
+            'Surface Location': _text(val(row_of(G, 'Surface Location'), I)),
+            'Bottom Hole Location': _text(val(row_of(G, 'Bottom Hole Location'), I)),
+            'Ground Elevation (m)': _num(val(r_elev[0] if r_elev else None, K)),
+            'KB Elevation (m)': _num(val(r_kb[0] if r_kb else None, K)),
         }
+
+        def stamp(row):
+            return _stamp(val(row, I), val(row, K))
+
         legs = []
-        for n in range(1, MAX_LEGS + 1):
-            r = 39 + n
-            legs.append(Leg(n, _num(g(f'C{r}')), _num(g(f'E{r}')), _stamp(g(f'I{r}'), g(f'K{r}'))))
+        for n, r in enumerate(leg_rows[:MAX_LEGS], 1):          # numbered by position (labels are sometimes stale)
+            legs.append(Leg(n, _num(val(r, C)), _num(val(r, E)), stamp(r)))
         legs = [lg for lg in legs if lg.kop or lg.td]
+
+        r_spud = row_of(G, 'SPUD')
+        spud = stamp(r_spud)
+        if spud is None and val(r_spud, I) not in (None, '', '-'):
+            warnings.append(f'Spud date is not a date ("{_text(val(r_spud, I))}"), so Surface time is left blank.')
+        r_surf = row_of(B, 'Surface Casing Depth')
+        r_int = row_of(B, 'Intermediate Casing')
+        r_heel = row_of(B, 'Hz Heel Point')
+        heel_md, heel_t = _num(val(r_heel, C)), stamp(r_heel)
+        int_md, int_t = _num(val(r_int, C)), stamp(r_int)
+        if heel_md is None and int_md is not None:
+            heel_md, heel_t = int_md, int_t
+            warnings.append(f'Hz Heel Point is blank on "Data"; the intermediate casing point ({int_md:,.0f} m) '
+                            'is used as the heel.')
+        r_td = row_of(B, 'Total Depth')
+        td_md, td_t = _num(val(r_td, C)), stamp(r_td)
+        if td_md is None and legs:
+            last = max((lg for lg in legs if lg.td), key=lambda lg: lg.reached or dt.datetime.min, default=None)
+            if last is not None:
+                td_md, td_t = last.td, last.reached
+                warnings.append(f'No "Total Depth" row on "Data"; Leg {last.number} TD ({td_md:,.0f} m) is used as the well TD.')
+        r_legs = row_of(B, 'Total # of Legs')
+        declared = _num(val(r_legs, Dc)) or _num(val(r_legs, C))
 
         daily: list[DailyRow] = []
         for sheet in ('DSum1', 'DSum2'):
@@ -196,20 +248,14 @@ def read_well_report(file_bytes: bytes) -> WellInputs:
                             + '; the day number here is counted from the dates instead.')
 
         return WellInputs(
-            well=well, spud=_stamp(g('I20'), g('K20')),
-            surface_casing_md=_num(g('C24')), surface_casing_reached=_stamp(g('I24'), g('K24')),
-            heel_md=_num(g('C32')), heel_reached=_stamp(g('I32'), g('K32')),
-            td_md=_num(g('C50')), td_reached=_stamp(g('I50'), g('K50')),
+            well=well, spud=spud,
+            surface_casing_md=_num(val(r_surf, C)), surface_casing_reached=stamp(r_surf),
+            heel_md=heel_md, heel_reached=heel_t, td_md=td_md, td_reached=td_t,
             legs=legs, daily=daily, warnings=warnings,
-            drill_out_surface=_stamp(g('I27'), g('K27')),
-            int_casing_md=_num(g('C31')), int_casing_reached=_stamp(g('I31'), g('K31')),
-            legs_declared=int(_num(g('D39'))) if _num(g('D39')) else None,
+            drill_out_surface=stamp(row_of(G, 'Drill Out Surf')),
+            int_casing_md=int_md, int_casing_reached=int_t,
+            legs_declared=int(declared) if declared else None,
         )
     finally:
         wb.close()
 
-
-def _rc(ref: str):
-    from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
-    col, row = coordinate_from_string(ref)
-    return row, column_index_from_string(col)
