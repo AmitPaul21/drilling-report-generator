@@ -1,11 +1,10 @@
 """Multi-leg drilling report calculations.
 
-Mirrors the formulas on the template's "Drilling Report - Multi Leg" tab (V2.2):
-* a leg's first plotted day is the day its heel / kick-off point applies, its last day is the
-  report that covers its "reached" time (or, without a time, the first day its TO depth is hit);
-* a sidetrack drilled on the same day the previous leg finished starts on the day before;
-  otherwise it starts the day before the TO depth first changes after the previous leg ended;
-* daily metres after Leg 1 starts = the sum of every active leg's progress that day.
+* a leg is drilled from the previous leg's "reached" time (the heel time for Leg 1) to its own;
+* its depth at the end of a report day is the TD if it was reached that day, else the TO depth
+  when that lies on the leg, else the next day's FROM depth (when TO still shows the old leg's TD);
+* daily metres = hole drilled down to the heel point + every active leg's progress that day;
+* a report time of 00:00 means the report closes at midnight (end of that day).
 """
 from __future__ import annotations
 
@@ -56,88 +55,100 @@ def build_report(inp: WellInputs) -> DrillingReport:
         frm = d.from_md
         if frm is None:
             frm = 0.0 if i == 0 else prev_to
-        rows.append({'Report Time': dt.datetime.combine(d.date.date(), t), 'Date': d.date.date(),
+        stamp = dt.datetime.combine(d.date.date(), t)
+        if t == dt.time(0, 0):                                   # 00:00 = report closes at midnight
+            stamp += dt.timedelta(days=1)
+        rows.append({'Report Time': stamp, 'Date': d.date.date(),
                      'From (m)': frm, 'To (m)': d.to_md, 'Operations': d.operations})
         if d.to_md is not None:
             prev_to = d.to_md
     df = pd.DataFrame(rows)
-    L, Nd = df['Report Time'].tolist(), df['To (m)'].tolist()
+    T, Nd = df['Report Time'].tolist(), df['To (m)'].tolist()
+    Fm = df['From (m)'].tolist()
     n_rows = len(df)
     has_to = [v is not None and pd.notna(v) for v in Nd]
+    last_t = T[-1] if T else None
 
-    def first_time(t, lo):
-        return next((i for i in range(max(lo, 0), n_rows) if L[i] >= t), None)
+    def num(v):
+        return None if v is None or pd.isna(v) else float(v)
 
-    def first_depth(md, lo):
-        return next((i for i in range(max(lo, 0), n_rows) if has_to[i] and Nd[i] >= md), None)
-
-    last_idx = max((i for i in range(n_rows) if has_to[i]), default=None)
-
-    # ---- leg start / end rows
-    legs: list[LegResult] = []
-    prev = None
+    # ---- when each leg is being drilled: from the previous leg's "reached" time to its own
+    heel_md = inp.heel_md or (inp.legs[0].kop if inp.legs else None)
+    starts, ends = [], []
+    t_prev = inp.heel_reached
+    if t_prev is None and inp.legs and inp.legs[0].kop:         # no heel time: first report past the KOP
+        k = next((i for i in range(n_rows) if has_to[i] and Nd[i] >= inp.legs[0].kop), None)
+        t_prev = (T[k - 1] if k else T[0] - dt.timedelta(seconds=1)) if k is not None else None
     for lg in inp.legs:
-        start = None
-        if lg.kop:
-            if prev is None:                                   # Leg 1: heel point
-                start = first_time(inp.heel_reached, 0) if inp.heel_reached else first_depth(lg.kop, 0)
-            elif prev.complete:
-                p = prev.end_idx
-                same_day = has_to[p] and prev.td is not None and abs(Nd[p] - prev.td) > 0.5
-                if same_day:
-                    start = p - 1
-                else:
-                    chg = next((i for i in range(p + 1, n_rows)
-                                if has_to[i] and has_to[i - 1] and Nd[i] != Nd[i - 1]), None)
-                    start = None if chg is None else chg - 1
-                if start is not None:
-                    start = max(start, 0)
-        found = None
-        if start is not None:
-            if lg.reached:
-                found = first_time(lg.reached, start)
-            elif lg.td:
-                found = first_depth(lg.td, start)
-        end = (found if found is not None else last_idx) if start is not None else None
-        res = LegResult(lg.number, lg.kop, lg.td, lg.length, lg.reached, start, end, found is not None, None)
-        legs.append(res)
-        prev = res if start is not None else (prev if prev and not prev.complete else res)
-        if start is None and lg.kop:
-            warnings.append(f'Leg {lg.number}: could not place it on the daily progress rows '
-                            f'(not drilled yet, or previous leg has no end time/depth).')
+        reached = lg.reached
+        if reached is None and t_prev is not None and lg.td:    # no time: first report at the leg's TD
+            k = next((i for i in range(n_rows) if T[i] > t_prev and has_to[i] and abs(Nd[i] - lg.td) < 0.5), None)
+            reached = T[k] if k is not None else None
+        starts.append(t_prev)
+        ends.append(reached)
+        t_prev = reached if reached is not None else None
 
-    # ---- per-leg depth series
-    for lg in legs:
-        col = f'Leg {lg.number}'
-        vals = [None] * n_rows
-        if lg.start_idx is not None:
-            for i in range(lg.start_idx, lg.end_idx + 1):
-                if i == lg.start_idx:
-                    vals[i] = lg.kop
-                elif i == lg.end_idx and lg.complete:
-                    vals[i] = lg.td
-                else:
-                    vals[i] = Nd[i] if has_to[i] else None
-        df[col] = vals
-    leg_cols = [f'Leg {lg.number}' for lg in legs]
-
-    # ---- daily metres drilled
-    s1 = legs[0].start_idx if legs else None
+    # ---- each leg's depth at the end of every report day, and the metres drilled that day
+    depth = {lg.number: [None] * n_rows for lg in inp.legs}
     drilled = []
     for i in range(n_rows):
-        frm, to = df.at[i, 'From (m)'], Nd[i]
-        if not has_to[i] or frm is None or pd.isna(frm):
-            drilled.append(None); continue
-        active = [c for c in leg_cols if df.at[i, c] is not None and pd.notna(df.at[i, c])]
-        if s1 is None or i <= s1 or not active:
-            drilled.append(max(0.0, to - frm))
-        else:
-            tot = 0.0
-            for c in active:
-                pv = df.at[i - 1, c] if i > 0 else None
-                if pv is not None and pd.notna(pv):
-                    tot += df.at[i, c] - pv
-            drilled.append(tot)
+        lo = T[i - 1] if i else None
+        frm, to = num(Fm[i]), num(Nd[i])
+        nxt = num(Fm[i + 1]) if i + 1 < n_rows else None
+        tot = 0.0
+        # surface / build hole down to the heel point
+        if to is not None and frm is not None and (inp.heel_reached is None or lo is None or lo < inp.heel_reached):
+            cap = heel_md if heel_md is not None and inp.legs else to
+            tot += max(0.0, min(to, cap) - min(frm, cap))
+        finished_td = {lg.td for lg, e in zip(inp.legs, ends) if e is not None and (lo is None or e > lo) and e <= T[i]}
+        for lg, a, e in zip(inp.legs, starts, ends):
+            if a is None or not lg.kop or a > T[i] or (e is not None and lo is not None and e <= lo):
+                continue                                          # leg not being drilled on this day
+            before = depth[lg.number][i - 1] if i else None
+            before = lg.kop if before is None else before
+            if e is not None and e <= T[i]:
+                d_end = lg.td                                     # leg reached its TD on this day
+            elif to is not None and lg.kop < to <= (lg.td or 1e9) and to not in finished_td:
+                d_end = to                                        # TO depth is on this leg
+            elif nxt is not None and lg.kop <= nxt <= (lg.td or 1e9):
+                d_end = nxt                                       # TO shows the old leg's TD: use next FROM
+            else:
+                d_end = before
+            d_end = max(d_end, before)
+            depth[lg.number][i] = d_end
+            tot += d_end - before
+        drilled.append(tot if (to is not None or tot) else None)
+
+    # ---- leg rows for the chart: kick-off on the day before the first metres, then daily depth
+    legs: list[LegResult] = []
+    for lg, a, e in zip(inp.legs, starts, ends):
+        vals = depth[lg.number]
+        prog = [i for i in range(n_rows) if vals[i] is not None and vals[i] > (vals[i - 1] if i and vals[i - 1] is not None else lg.kop)]
+        if not prog:
+            df[f'Leg {lg.number}'] = [None] * n_rows
+            legs.append(LegResult(lg.number, lg.kop, lg.td, lg.length, lg.reached, None, None, False, None))
+            if lg.kop:
+                warnings.append(f'Leg {lg.number}: no drilling found for it on the daily progress rows.')
+            continue
+        first = prog[0]
+        s_idx = max(first - 1, 0)
+        col = [None] * n_rows
+        col[s_idx] = lg.kop
+        for i in range(first, n_rows):
+            if vals[i] is not None:
+                col[i] = vals[i]
+        e_idx = max(i for i in range(n_rows) if col[i] is not None)
+        df[f'Leg {lg.number}'] = col
+        complete = e is not None and last_t is not None and e <= last_t
+        legs.append(LegResult(lg.number, lg.kop, lg.td, lg.length, lg.reached, s_idx, e_idx, complete, None))
+
+    # ---- cross-check against the Well Report's own DRILLED column
+    diffs = [f'{df.at[i, "Date"]:%d %b} ({d.drilled:,.0f} vs {drilled[i]:,.0f})'
+             for i, d in enumerate(inp.daily)
+             if d.drilled is not None and drilled[i] is not None and abs(d.drilled - drilled[i]) > 10]
+    if diffs:
+        warnings.append('Daily metres here differ from the DRILLED column on DSum1 for: ' + ', '.join(diffs)
+                        + '. This report counts every leg drilled that day (Well Report value vs this report).')
     df['Drilled (m)'] = drilled
     df['Template Drilled (m)'] = [None if not has_to[i] or pd.isna(df.at[i, 'From (m)']) else max(0.0, Nd[i] - df.at[i, 'From (m)'])
                                   for i in range(n_rows)]
