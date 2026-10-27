@@ -11,6 +11,7 @@ import streamlit as st
 from drilling_calc import build_report
 from drilling_export import fill_template
 from drilling_parser import WellReportError, read_well_report
+from drilling_pdf import build_pdf
 
 st.set_page_config(page_title='Drilling Report Generator', page_icon='🛢️', layout='wide')
 
@@ -42,7 +43,8 @@ def base_layout(fig: go.Figure, height: int, y_title: str):
 def process(data: bytes):
     rep = build_report(read_well_report(data))
     xlsm, written = fill_template(data)
-    return rep, xlsm, written
+    pdf = build_pdf(rep)
+    return rep, xlsm, written, pdf
 
 
 def fmt_dt(v):
@@ -65,7 +67,7 @@ if not up:
 
 with st.spinner('Reading the well report…'):
     try:
-        rep, xlsm, written = process(up.getvalue())
+        rep, xlsm, written, pdf = process(up.getvalue())
     except WellReportError as e:
         st.error(str(e))
         st.stop()
@@ -161,9 +163,11 @@ with st.expander('Daily progress and operations', expanded=False):
 # ---- downloads
 st.markdown('#### Downloads')
 lic = w.get('Licence #') or w.get('Well Name') or 'Well'
-d1, d2 = st.columns(2)
+d0, d1, d2 = st.columns(3)
+d0.download_button('Drilling Report (.pdf)', pdf, file_name=f'{safe_name(lic)}_Drilling_Report.pdf',
+                   mime='application/pdf', type='primary', width='stretch')
 d1.download_button('Drilling Report workbook (.xlsm)', xlsm, file_name=f'{safe_name(lic)}_Drilling_Report.xlsm',
-                   mime='application/vnd.ms-excel.sheet.macroEnabled.12', type='primary', width='stretch')
+                   mime='application/vnd.ms-excel.sheet.macroEnabled.12', width='stretch')
 export = df.drop(columns=['Report Time']).copy()
 d2.download_button('Daily data (.csv)', export.to_csv(index=False).encode(), file_name=f'{safe_name(lic)}_daily.csv',
                    mime='text/csv', width='stretch')
