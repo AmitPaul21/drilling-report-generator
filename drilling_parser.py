@@ -124,6 +124,23 @@ def _grid(ws, max_row, max_col):
     return out
 
 
+def idle_days(report_dates):
+    """Calendar days with no daily report between the first and last report (e.g. the well was suspended)."""
+    have = {d.date() if isinstance(d, dt.datetime) else d for d in report_dates}
+    if not have:
+        return set()
+    first, last = min(have), max(have)
+    return {first + dt.timedelta(days=i) for i in range((last - first).days + 1)} - have
+
+
+def active_hours(t0, t1, idle):
+    """Hours from t0 to t1, leaving out whole days on which no report was written."""
+    if t0 is None or t1 is None:
+        return None
+    skip = sum(1 for d in idle if t0.date() < d < t1.date())
+    return (t1 - t0).total_seconds() / 3600 - 24 * skip
+
+
 # ---------------------------------------------------------------- main entry
 def read_well_report(file_bytes: bytes) -> WellInputs:
     try:
