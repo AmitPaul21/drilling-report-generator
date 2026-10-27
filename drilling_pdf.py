@@ -10,7 +10,6 @@ import math
 import matplotlib
 
 matplotlib.use('Agg')
-import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -88,8 +87,11 @@ def _header(fig, rep):
     lic = w.get('Licence #')
     eyebrow = 'DRILLING OPERATIONS REPORT' + (f'   \u00b7   LICENCE {lic}' if lic else '')
     c.text(0, 0.66, eyebrow, fontsize=6.5, color=BRAND, fontweight='bold', va='center')
-    c.text(0, 0.88, w.get('Well Name') or 'Unnamed well', fontsize=16, fontweight='bold', color=NAVY,
-           va='center')
+    name = c.text(0, 0.88, w.get('Well Name') or 'Unnamed well', fontsize=16, fontweight='bold', color=NAVY,
+                  va='center')
+    width = name.get_window_extent(renderer=fig.canvas.get_renderer()).width / fig.dpi
+    if width > CW:                                   # long names shrink to fit inside the margins
+        name.set_fontsize(max(9, 16 * CW / width * 0.98))
     sub = '   \u00b7   '.join(v for v in (w.get('Licensee'), w.get('UWI'), w.get('Surface Location')) if v)
     c.text(0, 1.1, sub, fontsize=7.2, color=INK2, va='center')
     return top + 1.25
@@ -131,6 +133,23 @@ def _kpis(fig, rep, y, tiles=None):
     return y + 2 * th + gap
 
 
+def _day_axis(ax, dates, top):
+    """One slot per report day (no empty stretch when the well was suspended); a dashed line marks each break."""
+    d = pd.to_datetime(pd.Series(list(dates))).reset_index(drop=True)
+    xn = np.arange(len(d), dtype=float)
+    step = max(1, math.ceil(len(d) / 16))
+    ax.set_xticks(xn[::step])
+    ax.set_xticklabels([v.strftime('%d %b') for v in d[::step]])
+    for i in range(1, len(d)):
+        gap = (d[i].normalize() - d[i - 1].normalize()).days - 1
+        if gap > 0:
+            ax.axvline(i - 0.5, color=MUTED, linewidth=0.7, linestyle=(0, (3, 2)), zorder=1.5)
+            ax.text(i - 0.5, top * 0.5, f'{gap} days no report', rotation=90, ha='right', va='center',
+                    fontsize=5.6, color=INK2, zorder=1.6)
+    ax.set_xlim(-0.5, len(d) - 0.5)
+    return xn
+
+
 def _smooth(ax, xn, vals, color, z):
     for r in runs(vals):
         sx, sy = pchip(xn[r], vals[r])
@@ -144,11 +163,10 @@ def _combo_chart(fig, rep, y):
     _section_title(fig, y, 'Daily progress & measured depth',
                    'Bars: metres drilled per report day (left axis)   ·   Lines: measured depth by leg (right axis)')
     ax = _ax(fig, ML + 0.45, y + 0.68, CW - 0.95, 2.75)
-    x = pd.to_datetime(df['Date'])
-    xn = mdates.date2num(x)
     dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
-    bars = ax.bar(xn, dr, width=0.7, color=BAR, zorder=1, label='Metres drilled')
     top = max(250, math.ceil(dr.max() / 250) * 250)          # e.g. 908 m -> 0-1,000
+    xn = _day_axis(ax, df['Date'], top)
+    bars = ax.bar(xn, dr, width=0.7, color=BAR, zorder=1, label='Metres drilled')
     for xv, v in zip(xn, dr):
         ax.text(xv, top * 0.012, f'{v:,.0f}', ha='center', va='bottom', fontsize=4.9,
                 color=BAR_TEXT if v > 0 else MUTED, fontweight='bold' if v > 0 else 'normal', zorder=2)
@@ -156,9 +174,6 @@ def _combo_chart(fig, rep, y):
     ax.set_ylim(0, top)
     ax.yaxis.set_major_locator(MultipleLocator(top / 5))
     ax.set_ylabel('Metres drilled per day', fontsize=6.3, color=INK2)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
-    ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(df) // 12)))
-    ax.set_xlim(xn.min() - 0.6, xn.max() + 0.6)
 
     ax2 = ax.twinx()
     legs = [lg for lg in rep.legs if lg.start_idx is not None]
@@ -279,10 +294,10 @@ def _single_chart(fig, rep, y):
                    'Bars: metres drilled per report day (left axis)   \u00b7   Line: measured depth (right axis)'
                    '   \u00b7   Shading: well section')
     ax = _ax(fig, ML + 0.45, y + 0.68, CW - 0.95, 2.75)
-    xn = mdates.date2num(pd.to_datetime(df['Date']))
     dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
     to = pd.to_numeric(df['To (m)'], errors='coerce').to_numpy(float)
     top = max(250, math.ceil(dr.max() / 250) * 250)
+    xn = _day_axis(ax, df['Date'], top)
     # section shading: consecutive report days that end in the same section
     secs = list(df['Section'])
     i = 0
@@ -305,9 +320,6 @@ def _single_chart(fig, rep, y):
     ax.set_ylim(0, top)
     ax.yaxis.set_major_locator(MultipleLocator(top / 5))
     ax.set_ylabel('Metres drilled per day', fontsize=6.3, color=INK2)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b'))
-    ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(df) // 12)))
-    ax.set_xlim(xn.min() - 0.5, xn.max() + 0.5)
 
     ax2 = ax.twinx()
     ytop = math.ceil(np.nanmax(to) * 1.15 / 500) * 500 if np.isfinite(to).any() else 500
