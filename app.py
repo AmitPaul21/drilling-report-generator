@@ -43,14 +43,14 @@ MODES = {'Auto-detect': None, 'Single leg': 'single', 'Multi-leg': 'multi'}
 
 
 @st.cache_data(show_spinner=False)
-def load(data: bytes, version: str = '2026-10-27-single'):
+def load(data: bytes, version: str = '2026-10-27-gaps'):
     inp = read_well_report(data)
     xlsm, written = fill_template(data)
     return inp, detect_mode(inp), xlsm, written
 
 
 @st.cache_data(show_spinner=False)
-def make_report(data: bytes, mode: str, version: str = '2026-10-27-single'):
+def make_report(data: bytes, mode: str, version: str = '2026-10-27-gaps'):
     inp = read_well_report(data)
     if mode == 'single':
         rep = build_single_report(inp)
@@ -82,21 +82,32 @@ def kpi_tiles(tiles):
 
 
 def base_combo(df):
-    """Bars of daily metres (left axis) with value labels, incl. '0' on idle days."""
-    x = pd.to_datetime(df['Date'])
-    dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
+    """Bars of daily metres (left axis) with value labels, incl. '0' on idle days. One slot per report day,
+    so a suspension does not leave an empty stretch; a dashed line marks it."""
+    d = pd.to_datetime(df['Date']).reset_index(drop=True)
+    labels = d.dt.strftime('%d %b')
+    x = pd.Series(np.arange(len(d), dtype=float))
+    dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0).reset_index(drop=True)
     top = max(250, math.ceil(dr.max() / 250) * 250)
     fig = make_subplots(specs=[[{'secondary_y': True}]])
-    fig.add_trace(go.Bar(x=x, y=dr, name='Metres drilled', marker=dict(color=BAR), width=0.7 * 86400000,
+    fig.add_trace(go.Bar(x=x, y=dr, name='Metres drilled', marker=dict(color=BAR), width=0.7, customdata=labels,
                          text=[f'{v:,.0f}' for v in dr], textposition='inside', insidetextanchor='start',
                          textfont=dict(size=11, color=[BAR_TEXT if v > 0 else MUTED for v in dr]),
-                         constraintext='none', hovertemplate='%{x|%d %b}: %{y:,.0f} m drilled<extra></extra>'),
+                         constraintext='none', hovertemplate='%{customdata}: %{y:,.0f} m drilled<extra></extra>'),
                   secondary_y=False)
     zeros = dr[dr == 0].index
     if len(zeros):
         fig.add_trace(go.Scatter(x=x[zeros], y=[top * 0.02] * len(zeros), mode='text', text=['0'] * len(zeros),
                                  textfont=dict(size=11, color=MUTED), showlegend=False, hoverinfo='skip'),
                       secondary_y=False)
+    for i in range(1, len(d)):
+        gap = (d[i].normalize() - d[i - 1].normalize()).days - 1
+        if gap > 0:
+            fig.add_vline(x=i - 0.5, line=dict(color=MUTED, width=1, dash='dash'))
+            fig.add_annotation(x=i - 0.5, y=0.5, yref='paper', text=f'{gap} days no report', textangle=-90,
+                               showarrow=False, xshift=-8, font=dict(size=10, color=MUTED))
+    step = max(1, math.ceil(len(d) / 20))
+    fig.update_xaxes(tickvals=list(x[::step]), ticktext=list(labels[::step]), range=[-0.5, len(d) - 0.5])
     return fig, x, top
 
 
@@ -105,7 +116,7 @@ def finish_combo(fig, top, ytop, dtick_md=500):
                       font=dict(family='Inter, Arial, sans-serif', size=13, color=INK2), bargap=0.3,
                       legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
                       hovermode='closest')
-    fig.update_xaxes(showgrid=False, tickformat='%d %b', dtick=86400000, linecolor='#c9d1d9')
+    fig.update_xaxes(showgrid=False, linecolor='#c9d1d9')
     fig.update_yaxes(title_text='Metres drilled per day', range=[0, top], dtick=top / 5, gridcolor=GRID,
                      tickformat=',.0f', zeroline=False, secondary_y=False)
     fig.update_yaxes(title_text='Measured depth (m)', range=[0, ytop], dtick=dtick_md, showgrid=False,
@@ -214,14 +225,14 @@ if mode == 'single':
             j += 1
         if secs[i]:
             line, tint = SECTION_TONES[secs[i]]
-            fig.add_vrect(x0=x.iloc[i] - pd.Timedelta(hours=12), x1=x.iloc[j] + pd.Timedelta(hours=12),
+            fig.add_vrect(x0=x.iloc[i] - 0.5, x1=x.iloc[j] + 0.5,
                           fillcolor=tint, line_width=0, layer='below', annotation_text=secs[i].upper(),
                           annotation_position='top', annotation_font=dict(size=11, color=line))
         i = j + 1
-    xi = ((x - x.iloc[0]).dt.total_seconds() / 86400).to_numpy(float)
+    xi = x.to_numpy(float)
     for r in runs(to):
         sx, sy = pchip(xi[r], to[r])
-        fig.add_trace(go.Scatter(x=x.iloc[0] + pd.to_timedelta(sx, unit='D'), y=sy, mode='lines',
+        fig.add_trace(go.Scatter(x=sx, y=sy, mode='lines',
                                  line=dict(color=NAVY, width=2.5), name='Measured depth', hoverinfo='skip'),
                       secondary_y=True)
     ok = np.isfinite(to)
@@ -229,8 +240,8 @@ if mode == 'single':
                              marker=dict(size=9, color=[SECTION_TONES.get(s, (NAVY,))[0] for s, o in zip(secs, ok) if o],
                                          line=dict(color='white', width=1)),
                              text=[f'{v:,.0f}' for v in to[ok]], textposition='top center',
-                             textfont=dict(size=11, color=NAVY),
-                             hovertemplate='%{x|%d %b}: %{y:,.0f} m MD<extra></extra>'), secondary_y=True)
+                             textfont=dict(size=11, color=NAVY), customdata=pd.to_datetime(df['Date']).dt.strftime('%d %b').to_numpy()[ok],
+                             hovertemplate='%{customdata}: %{y:,.0f} m MD<extra></extra>'), secondary_y=True)
     ytop = math.ceil(np.nanmax(to) * 1.15 / 500) * 500 if ok.any() else 500
     finish_combo(fig, top, ytop, 500 if ytop > 1500 else 250)
 
@@ -261,7 +272,7 @@ else:
     section('Daily progress & measured depth',
             'Bars: metres drilled per report day (left axis) · Lines: measured depth by leg (right axis)')
     fig, x, top = base_combo(df)
-    xi = ((x - x.iloc[0]).dt.total_seconds() / 86400).to_numpy(float)
+    xi = x.to_numpy(float)
     first = legs[0].start_idx if legs else len(df) - 1
     to_md = pd.to_numeric(df['To (m)'], errors='coerce').to_numpy(float)
     series = [('Surface / build', NEUTRAL, np.array([v if i <= first else np.nan for i, v in enumerate(to_md)]))]
@@ -279,7 +290,7 @@ else:
     for name, colr, vals in series:
         for r in runs(vals):
             sx, sy = pchip(xi[r], vals[r])
-            fig.add_trace(go.Scatter(x=x.iloc[0] + pd.to_timedelta(sx, unit='D'), y=sy, mode='lines',
+            fig.add_trace(go.Scatter(x=sx, y=sy, mode='lines',
                                      line=dict(color=colr, width=2.5), showlegend=False, hoverinfo='skip',
                                      legendgroup=name), secondary_y=True)
         idx = [i for i in range(len(vals)) if np.isfinite(vals[i])]
