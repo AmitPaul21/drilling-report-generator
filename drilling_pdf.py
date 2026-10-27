@@ -1,7 +1,7 @@
 """One-page A4 Drilling Operations Report PDF in the Belloy brand.
 
-Margins: 25 mm on the left (room for 2/3-hole punching) and 15 mm elsewhere, so nothing is cut
-off when printed and punched."""
+Margins: 20 mm on the left (clears 2/3-hole punching), 12 mm right, 10 mm top and 20 mm at the
+bottom, so the footer stays clear of the printer's unprintable edge."""
 from __future__ import annotations
 
 import io
@@ -29,7 +29,7 @@ plt.rcParams.update({
 
 MM = 1 / 25.4
 PAGE_W, PAGE_H = 210 * MM, 297 * MM            # A4 portrait
-ML, MR, MT, MB = 25 * MM, 15 * MM, 15 * MM, 13 * MM   # left margin clears hole punches
+ML, MR, MT, MB = 20 * MM, 12 * MM, 10 * MM, 20 * MM   # left margin clears hole punches
 CW = PAGE_W - ML - MR                           # content width (~6.7 in)
 
 
