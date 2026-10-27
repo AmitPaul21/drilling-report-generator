@@ -169,8 +169,7 @@ def _combo_chart(fig, rep, y):
     for i, v, t, colr, where in label_offsets(pts, ytop * 0.045):
         ax2.annotate(t, (xn[i], v), xytext=(0, 5 if where == 'above' else -6), textcoords='offset points',
                      ha='center', va='bottom' if where == 'above' else 'top', fontsize=5, color=colr,
-                     fontweight='bold', zorder=6,
-                     bbox=dict(boxstyle='round,pad=0.08', facecolor='white', edgecolor='none', alpha=0.85))
+                     fontweight='bold', zorder=6)
     ax2.set_ylim(0, ytop)
     ax2.yaxis.set_major_locator(MultipleLocator(500))
     ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:,.0f}'))
