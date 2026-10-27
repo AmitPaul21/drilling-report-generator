@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from drilling_parser import WellInputs
+from drilling_parser import WellInputs, active_hours, idle_days
 
 END_OF_DAY = dt.time(23, 59)
 SECTIONS = ('Surface', 'Int / Build', 'Lateral')
@@ -67,6 +67,7 @@ def build_single_report(inp: WellInputs) -> SingleReport:
               ('Lateral', heel, td if (td and heel and td > heel) else None, heel_time,
                inp.td_reached if (td and heel and td > heel) else None)]
 
+    idle = idle_days(df['Date'])
     sec_rows = []
     for k, (name, a, b, t0, t1) in enumerate(limits):
         if a is None or b is None or b <= a:
@@ -75,7 +76,7 @@ def build_single_report(inp: WellInputs) -> SingleReport:
             continue
         last = name == 'Lateral'
         days = int(((frm >= a) & ((frm <= b) if last else (frm < b))).sum())
-        hrs = (t1 - t0).total_seconds() / 3600 if t0 and t1 else None
+        hrs = active_hours(t0, t1, idle)
         sec_rows.append({'Section': name, 'From (m)': a, 'To (m)': b, 'Length (m)': b - a, 'Days': days,
                          'Start': t0, 'End': t1, 'Hours': hrs})
     sections = pd.DataFrame(sec_rows)
@@ -102,7 +103,7 @@ def build_single_report(inp: WellInputs) -> SingleReport:
     kpis = {
         'total_depth_m': float(to.max()) if to.notna().any() else 0.0,
         'lateral_m': float(lat) if pd.notna(lat) else 0.0,
-        'operational_days': int((dates.max() - dates.min()).days + 1) if len(dates) else 0,
+        'operational_days': int(dates.dt.normalize().nunique()),
         'drilling_days': drilling_days,
         'non_drilling_days': int((dr == 0).sum()),
         'avg_daily_m': float(dr[dr > 0].sum() / drilling_days) if drilling_days else 0.0,
