@@ -4,7 +4,10 @@ Header with the well as the headline, a KPI strip, measured depth by leg, daily 
 time by section side by side, and a leg summary table. Each chart has a single y-scale."""
 from __future__ import annotations
 
+import functools
 import io
+import urllib.request
+from pathlib import Path
 
 import matplotlib
 
@@ -34,8 +37,32 @@ NEUTRAL = '#a3a29c'
 LEG_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
 
 PAGE_W, PAGE_H = 8.5, 11.0
+LOGO_URL = 'https://belloygeologists.ca/wp-content/uploads/2022/09/Belloy-Geologists-Logo-1.png'
+LOGO_FILE = Path(__file__).resolve().parent / 'belloy_logo.png'   # optional local override
+LOGO_COLOR = (14, 58, 87)                                           # Belloy navy
 M = 0.55                                   # page margin (in)
 CW = PAGE_W - 2 * M                        # content width
+
+
+@functools.lru_cache(maxsize=1)
+def load_logo():
+    """Belloy logo as an RGBA array, or None. Uses belloy_logo.png if present, otherwise the
+    website logo (white on transparent), recoloured navy for a white page."""
+    try:
+        import numpy as np
+        from PIL import Image
+        if LOGO_FILE.exists():
+            img = Image.open(LOGO_FILE).convert('RGBA')
+            return np.asarray(img)
+        req = urllib.request.Request(LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            img = Image.open(io.BytesIO(r.read())).convert('RGBA')
+        arr = np.array(img)
+        if arr[..., :3][arr[..., 3] > 128].mean() > 200:        # white logo -> recolour
+            arr[..., 0], arr[..., 1], arr[..., 2] = LOGO_COLOR
+        return arr
+    except Exception:  # noqa: BLE001 - logo is decoration; never fail the report
+        return None
 
 
 def leg_color(n: int) -> str:
@@ -78,21 +105,32 @@ def _section_title(fig, x, y, title, sub=None):
 # ---------------------------------------------------------------- blocks
 def _header(fig, rep):
     w = rep.well
-    c = _canvas(fig, M, 0.45, CW, 1.05)
-    c.add_patch(Rectangle((0, 0), 0.5, 0.05, color=ACCENT))
-    c.text(0, 0.22, 'DRILLING OPERATIONS REPORT', fontsize=7, color=ACCENT, fontweight='bold',
+    c = _canvas(fig, M, 0.45, CW, 1.1)
+    logo = load_logo()
+    x_eyebrow = 0
+    if logo is not None:
+        lh = 0.32                                   # logo height (in)
+        lw = lh * logo.shape[1] / logo.shape[0]
+        lax = _ax(fig, M, 0.45, lw, lh)
+        lax.imshow(logo, interpolation='lanczos'); lax.axis('off')
+        c.plot([lw + 0.15, lw + 0.15], [0.04, 0.28], color='#d6d5d0', linewidth=0.8)
+        x_eyebrow = lw + 0.3
+    else:
+        c.add_patch(Rectangle((0, 0.1), 0.5, 0.05, color=ACCENT))
+        x_eyebrow = 0.65
+    c.text(x_eyebrow, 0.16, 'DRILLING OPERATIONS REPORT', fontsize=7, color=ACCENT, fontweight='bold',
            va='center')
-    c.text(0, 0.47, w.get('Well Name') or 'Unnamed well', fontsize=17, fontweight='bold', color=INK,
-           va='center')
-    sub = '   ·   '.join(v for v in (w.get('Licensee'), w.get('UWI'), w.get('Surface Location')) if v)
-    c.text(0, 0.72, sub, fontsize=7.5, color=INK2, va='center')
-    # spud / TD on the right
+    # spud / TD on the right of the top row
     for i, (lab, val) in enumerate((('SPUD', rep.milestones.get('Spud')),
                                     ('TOTAL DEPTH', rep.milestones.get('Total Depth')))):
-        x = CW - 1.55 * (1 - i) - 0.05
-        c.text(x - 1.4, 0.22, lab, fontsize=6, color=MUTED, fontweight='bold', va='center')
-        c.text(x - 1.4, 0.42, _dt(val), fontsize=7.5, color=INK, va='center')
-    c.plot([0, CW], [0.95, 0.95], color='#e2e1dc', linewidth=0.8)
+        x = CW - (1 - i) * 1.5 - 1.45
+        c.text(x, 0.06, lab, fontsize=5.8, color=MUTED, fontweight='bold', va='center')
+        c.text(x, 0.24, _dt(val), fontsize=7.5, color=INK, va='center')
+    c.text(0, 0.6, w.get('Well Name') or 'Unnamed well', fontsize=17, fontweight='bold', color=INK,
+           va='center')
+    sub = '   \u00b7   '.join(v for v in (w.get('Licensee'), w.get('UWI'), w.get('Surface Location')) if v)
+    c.text(0, 0.84, sub, fontsize=7.5, color=INK2, va='center')
+    c.plot([0, CW], [1.02, 1.02], color='#e2e1dc', linewidth=0.8)
 
 
 def _kpis(fig, rep):
@@ -105,7 +143,7 @@ def _kpis(fig, rep):
              ('Avg daily progress', f"{k['avg_daily_m']:,.0f}", 'm/day')]
     gap = 0.1
     tw = (CW - gap * (len(tiles) - 1)) / len(tiles)
-    c = _canvas(fig, M, 1.6, CW, 0.82)
+    c = _canvas(fig, M, 1.66, CW, 0.82)
     for i, (lab, val, unit) in enumerate(tiles):
         x = i * (tw + gap)
         c.add_patch(FancyBboxPatch((x, 0), tw, 0.8, boxstyle='round,pad=0,rounding_size=0.06',
