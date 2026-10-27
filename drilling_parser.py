@@ -36,6 +36,8 @@ class DailyRow:
     from_md: float | None
     to_md: float | None
     operations: str
+    drilled: float | None = None          # the report's own DRILLED column (L)
+    day: float | None = None              # DAY column (D)
 
 
 @dataclass
@@ -182,10 +184,16 @@ def read_well_report(file_bytes: bytes) -> WellInputs:
                 if d is None:
                     warnings.append(f'{sheet} row {r}: depth {to:g} m has no date and was skipped.')
                     continue
-                daily.append(DailyRow(d, _time(S.get((r, 6))), _num(S.get((r, 8))), to, _text(S.get((r, 15)))))
+                daily.append(DailyRow(d, _time(S.get((r, 6))), _num(S.get((r, 8))), to, _text(S.get((r, 15))),
+                                      _num(S.get((r, 12))), _num(S.get((r, 4)))))
         if not daily:
             raise WellReportError('No daily progress rows were found on "DSum1" (date in column A, TO depth in column J).')
         daily.sort(key=lambda x: x.date)
+        days = [x.day for x in daily if x.day is not None]
+        dupes = sorted({int(v) for v in days if days.count(v) > 1})
+        if dupes:
+            warnings.append('DSum1 DAY column repeats day ' + ', '.join(map(str, dupes))
+                            + '; the day number here is counted from the dates instead.')
 
         return WellInputs(
             well=well, spud=_stamp(g('I20'), g('K20')),
