@@ -32,6 +32,8 @@ GRID = '#ebeae6'
 CARD = '#f5f4f1'
 ACCENT = '#2a78d6'
 BAR = '#6da7ec'
+BAR_SOFT = '#cfe0f6'
+BAR_TEXT = '#3d6fa8'
 NEUTRAL = '#a3a29c'
 # validated categorical order - colour follows the leg number
 LEG_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
@@ -51,8 +53,15 @@ def load_logo():
     try:
         import numpy as np
         from PIL import Image
+        try:
+            from logo_data import LOGO_PNG_B64          # optional: logo embedded as text
+        except ImportError:
+            LOGO_PNG_B64 = None
         if LOGO_FILE.exists():
             img = Image.open(LOGO_FILE).convert('RGBA')
+        elif LOGO_PNG_B64:
+            import base64
+            img = Image.open(io.BytesIO(base64.b64decode(LOGO_PNG_B64))).convert('RGBA')
         else:
             req = urllib.request.Request(LOGO_URL, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=6) as r:
@@ -160,85 +169,85 @@ def _kpis(fig, rep):
             c.text(x + 0.12 + wid + 0.05, 0.56, unit, fontsize=6.5, color=INK2, va='center')
 
 
-def _depth_chart(fig, rep):
+def _combo_chart(fig, rep):
+    """Daily metres (bars, left axis) with measured depth per leg (lines, right axis)."""
     df = rep.daily
-    _section_title(fig, M, 2.6, 'Measured depth by leg', 'Kick-off depth to end depth for each leg, by report day')
-    ax = _ax(fig, M + 0.45, 3.05, CW - 0.55, 2.55)
-    x = pd.to_datetime(df['Date'])
-    legs = [lg for lg in rep.legs if lg.start_idx is not None]
-    first = legs[0].start_idx if legs else len(df) - 1
-    ax.plot(x[:first + 1], df['To (m)'][:first + 1], color=NEUTRAL, linewidth=1.8, marker='o',
-            markersize=3.5, markeredgecolor='white', markeredgewidth=0.6, label='Surface / build', zorder=3)
-    for lg in legs:
-        s = pd.to_numeric(df[f'Leg {lg.number}'], errors='coerce')
-        ax.plot(x, s, color=leg_color(lg.number), linewidth=1.8, marker='o', markersize=3.8,
-                markeredgecolor='white', markeredgewidth=0.6, label=f'Leg {lg.number}', zorder=4)
-        last = s.last_valid_index()
-        if last is not None:
-            ax.annotate(f'{s[last]:,.0f}', (x[last], s[last]), xytext=(0, 5), textcoords='offset points',
-                        ha='center', fontsize=5.8, color=INK2, fontweight='bold')
-    _style(ax)
-    ax.set_ylabel('MD (m)', fontsize=6.5, color=INK2)
-    ax.set_ylim(0, None)
-    ax.yaxis.set_major_locator(MaxNLocator(5))
-    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter('%d %b'))
-    ax.xaxis.set_major_locator(matplotlib.dates.DayLocator(interval=max(1, len(df) // 10)))
-    ax.set_xlim(x.min() - pd.Timedelta(hours=12), x.max() + pd.Timedelta(hours=12))
-    ax.legend(loc='lower right', ncol=min(4, len(legs) + 1), fontsize=6, frameon=False,
-              handlelength=1.4, columnspacing=1.0, borderaxespad=0.2)
-
-
-def _daily_chart(fig, rep):
-    df = rep.daily
-    w = CW * 0.56
-    _section_title(fig, M, 5.85, 'Daily metres drilled', 'All legs combined, per report day')
-    ax = _ax(fig, M + 0.45, 6.3, w - 0.5, 1.95)
+    _section_title(fig, M, 2.6, 'Daily progress & measured depth',
+                   'Bars: metres drilled per report day (left)   \u00b7   Lines: measured depth by leg (right)')
+    ax = _ax(fig, M + 0.5, 3.15, CW - 1.05, 2.85)
     x = pd.to_datetime(df['Date'])
     dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
-    bars = ax.bar(x, dr, width=0.72, color=BAR, zorder=2)
+    bars = ax.bar(x, dr, width=0.7, color=BAR_SOFT, zorder=1, label='Metres drilled')
     for b, v in zip(bars, dr):
         if v > 0:
-            ax.text(b.get_x() + b.get_width() / 2, v + dr.max() * 0.02, f'{v:,.0f}', ha='center',
-                    va='bottom', fontsize=5, color=INK2)
+            ax.text(b.get_x() + b.get_width() / 2, 0 + dr.max() * 0.015, f'{v:,.0f}', ha='center',
+                    va='bottom', fontsize=5, color=BAR_TEXT, zorder=2)
     _style(ax)
-    ax.set_ylim(0, dr.max() * 1.15 if dr.max() else 1)
-    ax.yaxis.set_major_locator(MaxNLocator(4))
+    ax.set_ylim(0, (dr.max() or 1) * 1.9)
+    ax.yaxis.set_major_locator(MaxNLocator(5))
+    ax.set_ylabel('Metres drilled per day', fontsize=6.5, color=INK2)
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter('%d %b'))
-    ax.xaxis.set_major_locator(matplotlib.dates.DayLocator(interval=max(2, len(df) // 6)))
+    ax.xaxis.set_major_locator(matplotlib.dates.DayLocator(interval=max(1, len(df) // 12)))
     ax.set_xlim(x.min() - pd.Timedelta(hours=14), x.max() + pd.Timedelta(hours=14))
+
+    ax2 = ax.twinx()
+    legs = [lg for lg in rep.legs if lg.start_idx is not None]
+    first = legs[0].start_idx if legs else len(df) - 1
+    handles = [bars]
+    h, = ax2.plot(x[:first + 1], df['To (m)'][:first + 1], color=NEUTRAL, linewidth=1.8, marker='o',
+                  markersize=3.5, markeredgecolor='white', markeredgewidth=0.6, label='Surface / build', zorder=3)
+    handles.append(h)
+    md_max = pd.to_numeric(df['To (m)'], errors='coerce').max()
+    for lg in legs:
+        s = pd.to_numeric(df[f'Leg {lg.number}'], errors='coerce')
+        md_max = max(md_max, s.max())
+        h, = ax2.plot(x, s, color=leg_color(lg.number), linewidth=1.9, marker='o', markersize=3.8,
+                      markeredgecolor='white', markeredgewidth=0.6, label=f'Leg {lg.number}', zorder=4)
+        handles.append(h)
+        last = s.last_valid_index()
+        if last is not None:
+            ax2.annotate(f'{s[last]:,.0f}', (x[last], s[last]), xytext=(0, 5), textcoords='offset points',
+                         ha='center', fontsize=5.8, color=INK2, fontweight='bold', zorder=5)
+    ax2.set_ylim(0, md_max * 1.12)
+    ax2.yaxis.set_major_locator(MaxNLocator(5))
+    ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:,.0f}'))
+    ax2.set_ylabel('Measured depth (m)', fontsize=6.5, color=INK2)
+    ax2.tick_params(labelsize=6.5, pad=3)
+    for sp in ('top', 'left', 'right', 'bottom'):
+        ax2.spines[sp].set_visible(False)
+    ax.legend(handles, [hh.get_label() for hh in handles], loc='lower center', bbox_to_anchor=(0.5, 1.0),
+              ncol=len(handles), fontsize=6, frameon=False, handlelength=1.4, columnspacing=1.1)
 
 
 def _time_chart(fig, rep):
     sec = rep.sections.dropna(subset=['Hours'])
-    x0 = M + CW * 0.6
-    w = CW * 0.4
-    _section_title(fig, x0, 5.85, 'Time by section', f"{rep.kpis['total_hours']:,.1f} hrs spud to TD")
-    ax = _ax(fig, x0 + 0.62, 6.3, w - 0.95, 1.95)
+    _section_title(fig, M, 6.3, 'Time by section', f"{rep.kpis['total_hours']:,.1f} hrs spud to TD")
+    ax = _ax(fig, M + 0.75, 6.68, CW - 1.6, 1.65)
     names = list(sec['Section'])
     hrs = list(sec['Hours'])
     colors = [leg_color(int(n.split()[1])) if n.startswith('Leg') else NEUTRAL for n in names]
     y = range(len(names))
-    ax.barh(list(y), hrs, height=0.62, color=colors, zorder=2)
+    ax.barh(list(y), hrs, height=0.6, color=colors, zorder=2)
     total = sum(hrs) or 1
-    for yi, h in zip(y, hrs):
-        ax.text(h + max(hrs) * 0.03, yi, f'{h:,.1f} h  ·  {h / total:.0%}', va='center', fontsize=5.6,
+    for yi, hh in zip(y, hrs):
+        ax.text(hh + max(hrs) * 0.015, yi, f'{hh:,.1f} h  \u00b7  {hh / total:.0%}', va='center', fontsize=5.8,
                 color=INK2)
     ax.set_yticks(list(y)); ax.set_yticklabels(names, fontsize=6.5, color=INK)
     ax.invert_yaxis()
-    ax.set_xlim(0, max(hrs) * 1.45 if hrs else 1)
-    for s in ('top', 'right', 'bottom', 'left'):
-        ax.spines[s].set_visible(False)
+    ax.set_xlim(0, max(hrs) * 1.2 if hrs else 1)
+    for sp in ('top', 'right', 'bottom', 'left'):
+        ax.spines[sp].set_visible(False)
     ax.set_xticks([])
     ax.tick_params(axis='y', pad=4)
 
 
 def _leg_table(fig, rep):
-    _section_title(fig, M, 8.45, 'Leg summary')
-    cols = [('Leg', 0.0, 'left'), ('Kick-off (m)', 1.35, 'right'), ('End MD (m)', 2.45, 'right'),
-            ('Length (m)', 3.5, 'right'), ('Reached', 5.15, 'right'), ('Leg time (hrs)', CW - 0.05, 'right')]
+    _section_title(fig, M, 8.5, 'Leg summary')
+    cols = [('Leg', 0.0, 'left'), ('Sidetrack point (m)', 1.55, 'right'), ('End MD (m)', 2.6, 'right'),
+            ('Length (m)', 3.6, 'right'), ('Reached', 5.15, 'right'), ('Leg time (hrs)', CW - 0.05, 'right')]
     rows = [lg for lg in rep.legs]
     rh = 0.18
-    c = _canvas(fig, M, 8.78, CW, rh * (len(rows) + 2) + 0.1)
+    c = _canvas(fig, M, 8.83, CW, rh * (len(rows) + 2) + 0.1)
     for name, x, ha in cols:
         c.text(x, 0.1, name.upper(), fontsize=5.6, color=MUTED, fontweight='bold', ha=ha, va='center')
     c.plot([0, CW], [0.2, 0.2], color='#d6d5d0', linewidth=0.7)
@@ -255,17 +264,15 @@ def _leg_table(fig, rep):
     yt = 0.2 + rh * len(rows)
     c.plot([0, CW], [yt, yt], color='#d6d5d0', linewidth=0.7)
     c.text(0.14, yt + 0.11, 'Total', fontsize=7, fontweight='bold', color=INK, va='center')
-    c.text(3.5, yt + 0.11, f"{rep.kpis['total_hz_m']:,.0f}", fontsize=7, fontweight='bold', color=INK,
+    c.text(3.6, yt + 0.11, f"{rep.kpis['total_hz_m']:,.0f}", fontsize=7, fontweight='bold', color=INK,
            ha='right', va='center')
 
 
 def _footer(fig, rep):
     c = _canvas(fig, M, PAGE_H - 0.5, CW, 0.2)
     c.plot([0, CW], [0, 0], color='#e2e1dc', linewidth=0.6)
-    c.text(0, 0.12, 'Belloy Petroleum Consulting Ltd.  ·  Drilling Report Generator', fontsize=5.8,
-           color=MUTED, va='center')
-    c.text(CW, 0.12, f"Generated {pd.Timestamp.now().strftime('%d %b %Y')}", fontsize=5.8, color=MUTED,
-           ha='right', va='center')
+    c.text(CW / 2, 0.12, 'Created by Belloy Petroleum Consulting LTD.', fontsize=6, color=MUTED,
+           ha='center', va='center')
 
 
 def build_pdf(rep) -> bytes:
@@ -273,8 +280,7 @@ def build_pdf(rep) -> bytes:
     fig.patch.set_facecolor('white')
     _header(fig, rep)
     _kpis(fig, rep)
-    _depth_chart(fig, rep)
-    _daily_chart(fig, rep)
+    _combo_chart(fig, rep)
     _time_chart(fig, rep)
     _leg_table(fig, rep)
     _footer(fig, rep)
