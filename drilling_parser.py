@@ -51,6 +51,10 @@ class WellInputs:
     legs: list[Leg]
     daily: list[DailyRow]
     warnings: list[str] = field(default_factory=list)
+    drill_out_surface: dt.datetime | None = None      # Data row 27
+    int_casing_md: float | None = None                # Data row 31
+    int_casing_reached: dt.datetime | None = None
+    legs_declared: int | None = None                  # Data D39 'Total # of Legs'
 
 
 # ---------------------------------------------------------------- helpers
@@ -172,6 +176,9 @@ def read_well_report(file_bytes: bytes) -> WellInputs:
             heel_md=_num(g('C32')), heel_reached=_stamp(g('I32'), g('K32')),
             td_md=_num(g('C50')), td_reached=_stamp(g('I50'), g('K50')),
             legs=legs, daily=daily, warnings=warnings,
+            drill_out_surface=_stamp(g('I27'), g('K27')),
+            int_casing_md=_num(g('C31')), int_casing_reached=_stamp(g('I31'), g('K31')),
+            legs_declared=int(_num(g('D39'))) if _num(g('D39')) else None,
         )
     finally:
         wb.close()
