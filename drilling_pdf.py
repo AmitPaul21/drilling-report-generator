@@ -1,4 +1,5 @@
-"""One-page A4 Drilling Operations Report PDF in the Belloy brand.
+"""One-page US Letter Drilling Operations Report PDF in the Belloy brand (same page size as the rest of the
+Final Geological Report).
 
 Margins: 20 mm on the left (clears 2/3-hole punching), 12 mm right, 10 mm top and 20 mm at the
 bottom, so the footer stays clear of the printer's unprintable edge."""
@@ -28,9 +29,10 @@ plt.rcParams.update({
 })
 
 MM = 1 / 25.4
-PAGE_W, PAGE_H = 210 * MM, 297 * MM            # A4 portrait
+PAGE_W, PAGE_H = 8.5, 11.0                      # US Letter portrait (inches)
 ML, MR, MT, MB = 20 * MM, 12 * MM, 10 * MM, 20 * MM   # left margin clears hole punches
 CW = PAGE_W - ML - MR                           # content width (~6.7 in)
+CHART_H = 2.35                                  # combined chart height (in)
 
 
 def _ax(fig, x, y, w, h, **kw):
@@ -162,7 +164,7 @@ def _combo_chart(fig, rep, y):
     df = rep.daily
     _section_title(fig, y, 'Daily progress & measured depth',
                    'Bars: metres drilled per report day (left axis)   ·   Lines: measured depth by leg (right axis)')
-    ax = _ax(fig, ML + 0.45, y + 0.68, CW - 0.95, 2.75)
+    ax = _ax(fig, ML + 0.45, y + 0.68, CW - 0.95, CHART_H)
     dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
     top = max(250, math.ceil(dr.max() / 250) * 250)          # e.g. 908 m -> 0-1,000
     xn = _day_axis(ax, df['Date'], top)
@@ -206,7 +208,7 @@ def _combo_chart(fig, rep, y):
         ax2.spines[sp].set_visible(False)
     ax.legend(handles, [h.get_label() for h in handles], loc='lower center', bbox_to_anchor=(0.5, 1.0),
               ncol=min(len(handles), 8), fontsize=5.8, frameon=False, handlelength=1.3, columnspacing=0.9)
-    return y + 0.68 + 2.75 + 0.3
+    return y + 0.68 + CHART_H + 0.3
 
 
 def _time_chart(fig, rep, y):
@@ -293,7 +295,7 @@ def _single_chart(fig, rep, y):
     _section_title(fig, y, 'Daily progress & measured depth',
                    'Bars: metres drilled per report day (left axis)   \u00b7   Line: measured depth (right axis)'
                    '   \u00b7   Shading: well section')
-    ax = _ax(fig, ML + 0.45, y + 0.68, CW - 0.95, 2.75)
+    ax = _ax(fig, ML + 0.45, y + 0.68, CW - 0.95, CHART_H)
     dr = pd.to_numeric(df['Drilled (m)'], errors='coerce').fillna(0)
     to = pd.to_numeric(df['To (m)'], errors='coerce').to_numpy(float)
     top = max(250, math.ceil(dr.max() / 250) * 250)
@@ -345,7 +347,7 @@ def _single_chart(fig, rep, y):
                 for n in ('Surface', 'Int / Build', 'Lateral') if n in secs]
     ax.legend(handles, [h.get_label() for h in handles], loc='lower center', bbox_to_anchor=(0.5, 1.0),
               ncol=len(handles), fontsize=5.8, frameon=False, handlelength=1.3, columnspacing=1.0)
-    return y + 0.68 + 2.75 + 0.3
+    return y + 0.68 + CHART_H + 0.3
 
 
 def _single_time(fig, rep, y):
