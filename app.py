@@ -48,7 +48,7 @@ def load(data: bytes, version: str = '2026-10-27-pdf'):
 
 
 @st.cache_data(show_spinner=False)
-def make_report(data: bytes, mode: str, version: str = '2026-10-27-gaps'):
+def make_report(data: bytes, mode: str, version: str = '2026-10-28-letter'):
     inp = read_well_report(data)
     if mode == 'single':
         rep = build_single_report(inp)
@@ -177,7 +177,7 @@ lic = w.get('Licence #') or w.get('Well Name') or 'Well'
 tag = 'Single_Leg' if mode == 'single' else 'Multi_Leg'
 
 # ---- download first, so it is easy to find
-st.download_button('⬇ Download Drilling Report (PDF, A4)', pdf,
+st.download_button('⬇ Download Drilling Report (PDF, Letter)', pdf,
                    file_name=f'{safe_name(lic)}_Drilling_Report_{tag}.pdf',
                    mime='application/pdf', type='primary', width='stretch')
 
